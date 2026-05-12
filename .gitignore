@@ -1,0 +1,26 @@
+# Secrets — never commit
+.env
+*.env.local
+
+# Database — stays on the server, not in source control
+*.sqlite
+*.sqlite-*
+db.sqlite
+db.backup-*.sqlite
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+env/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editor noise
+.vscode/
+.idea/
+*.swp

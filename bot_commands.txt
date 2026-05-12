@@ -1,0 +1,6 @@
+newgame - Schedule a new game
+games - Show upcoming games
+mygames - Show games you're signed up for
+past - Recent past games
+week - Games in a specific week (Mon-Sun)
+help - Show help
