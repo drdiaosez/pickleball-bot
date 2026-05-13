@@ -175,6 +175,12 @@ def _002_games_chat_id_not_null(conn: sqlite3.Connection) -> None:
 
     If any NULL rows remain (e.g. the DM-created game with id=9), they would
     block this migration. We log a warning and skip them rather than failing.
+
+    CRITICAL: SQLite's standard table-swap pattern (CREATE new, copy, DROP old,
+    RENAME) will cascade ON DELETE CASCADE foreign keys when we DROP the old
+    games table — destroying every participants row. We MUST disable foreign
+    keys for the duration of this migration. SQLite requires this to be set
+    outside any transaction, so we manage the transaction explicitly.
     """
     null_count = conn.execute(
         "SELECT COUNT(*) AS n FROM games WHERE chat_id IS NULL"
@@ -187,39 +193,55 @@ def _002_games_chat_id_not_null(conn: sqlite3.Connection) -> None:
             null_count,
         )
 
-    conn.executescript(
-        """
-        BEGIN;
+    # Foreign keys MUST be off before any transaction starts here, otherwise
+    # the DROP TABLE games cascades to participants and moneyballs.
+    fk_was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE games_new (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scheduled_for  TEXT NOT NULL,
+                    location       TEXT NOT NULL,
+                    organizer_id   INTEGER NOT NULL REFERENCES members(telegram_id),
+                    max_players    INTEGER NOT NULL DEFAULT 4,
+                    status         TEXT NOT NULL DEFAULT 'open',
+                    notes          TEXT,
+                    chat_id        INTEGER NOT NULL,
+                    message_id     INTEGER,
+                    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+                );
 
-        CREATE TABLE games_new (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            scheduled_for  TEXT NOT NULL,
-            location       TEXT NOT NULL,
-            organizer_id   INTEGER NOT NULL REFERENCES members(telegram_id),
-            max_players    INTEGER NOT NULL DEFAULT 4,
-            status         TEXT NOT NULL DEFAULT 'open',
-            notes          TEXT,
-            chat_id        INTEGER NOT NULL,
-            message_id     INTEGER,
-            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
-        );
+                INSERT INTO games_new
+                    SELECT id, scheduled_for, location, organizer_id, max_players,
+                           status, notes, chat_id, message_id, created_at
+                    FROM games
+                    WHERE chat_id IS NOT NULL;
 
-        INSERT INTO games_new
-            SELECT id, scheduled_for, location, organizer_id, max_players,
-                   status, notes, chat_id, message_id, created_at
-            FROM games
-            WHERE chat_id IS NOT NULL;
+                DROP TABLE games;
+                ALTER TABLE games_new RENAME TO games;
 
-        DROP TABLE games;
-        ALTER TABLE games_new RENAME TO games;
-
-        CREATE INDEX IF NOT EXISTS idx_games_scheduled ON games(scheduled_for);
-        CREATE INDEX IF NOT EXISTS idx_games_status ON games(status);
-        CREATE INDEX IF NOT EXISTS idx_games_chat ON games(chat_id);
-
-        COMMIT;
-        """
-    )
+                CREATE INDEX IF NOT EXISTS idx_games_scheduled ON games(scheduled_for);
+                CREATE INDEX IF NOT EXISTS idx_games_status ON games(status);
+                CREATE INDEX IF NOT EXISTS idx_games_chat ON games(chat_id);
+                """
+            )
+            # Sanity check: foreign keys still valid after the swap?
+            violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise RuntimeError(
+                    f"Migration 002 produced FK violations: {[dict(v) for v in violations]}"
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        if fk_was_on:
+            conn.execute("PRAGMA foreign_keys = ON")
 
 
 # Append future migrations here as ("003_name", _003_func), etc.
