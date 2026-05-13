@@ -196,10 +196,132 @@ async def _post_launch_card(
         context.bot_data["bot_username"] = bot_username
 
     url = _miniapp_launch_link(bot_username, mb_id)
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🎾 Open Money Ball", url=url)
-    ]])
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎾 Open Money Ball", url=url)],
+        [InlineKeyboardButton("🗑 Cancel Money Ball", callback_data=f"mb_cancel:{mb_id}")],
+    ])
     await update.effective_message.reply_html(msg, reply_markup=kb)
+
+
+# ─────────────────────────────────────────────
+# Cancel money ball (two-step confirmation)
+# ─────────────────────────────────────────────
+
+async def on_mb_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """First step: confirmation prompt."""
+    if not await gate(update):
+        return
+    q = update.callback_query
+    await q.answer()
+    try:
+        mb_id = int(q.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return
+
+    mb = moneyball.get_moneyball(mb_id)
+    if not mb:
+        await q.edit_message_text("This money ball no longer exists.")
+        return
+
+    tz = context.bot_data["tz"]
+    completed = sum(
+        1 for round_matches in mb["matches"]
+        for m in round_matches
+        if m["scoreA"] is not None and m["scoreB"] is not None
+    )
+    when = views.format_when(mb["game"]["scheduled_for"], tz)
+
+    msg = (
+        f"⚠ <b>Cancel this money ball?</b>\n\n"
+        f"<i>{escape(when)} @ {escape(mb['game']['location'])}</i>\n"
+        f"Status: {mb['status']}, {completed}/14 matches played.\n\n"
+        f"<b>This permanently deletes the tournament and all scores.</b> "
+        f"The game itself stays — only the money ball is removed. "
+        f"You can start a fresh one for the same game afterward."
+    )
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Yes, cancel it", callback_data=f"mb_cancel_yes:{mb_id}"),
+        InlineKeyboardButton("No, keep it", callback_data=f"mb_cancel_no:{mb_id}"),
+    ]])
+    await q.edit_message_text(msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def on_mb_cancel_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Second step: actually delete, or revert to the launch card."""
+    if not await gate(update):
+        return
+    q = update.callback_query
+    await q.answer()
+    parts = (q.data or "").split(":", 1)
+    if len(parts) != 2:
+        return
+    action, mb_id_str = parts
+    try:
+        mb_id = int(mb_id_str)
+    except ValueError:
+        return
+
+    if action == "mb_cancel_no":
+        # Restore the launch card. Easiest: just edit the message back to a
+        # launcher view. We reuse the existing renderer by mutating the
+        # message rather than posting a new one.
+        mb = moneyball.get_moneyball(mb_id)
+        if not mb:
+            await q.edit_message_text("This money ball no longer exists.")
+            return
+        await _replace_with_launch_card(context, q, mb_id)
+        return
+
+    if action != "mb_cancel_yes":
+        return
+
+    # Actually delete
+    mb = moneyball.get_moneyball(mb_id)
+    if not mb:
+        await q.edit_message_text("Already gone.")
+        return
+    tz = context.bot_data["tz"]
+    when = views.format_when(mb["game"]["scheduled_for"], tz)
+    location = mb["game"]["location"]
+
+    moneyball.delete_moneyball(mb_id)
+
+    await q.edit_message_text(
+        f"🗑 Money ball cancelled.\n"
+        f"<i>{escape(when)} @ {escape(location)}</i>\n\n"
+        f"<i>The game itself is still scheduled — run /moneyball again on it "
+        f"if you want to restart.</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def _replace_with_launch_card(context, query, mb_id: int) -> None:
+    """Rebuild the launch-card text + buttons on an existing message."""
+    tz = context.bot_data["tz"]
+    mb = moneyball.get_moneyball(mb_id)
+    if not mb:
+        return
+    when = views.format_when(mb["game"]["scheduled_for"], tz)
+    roster = ", ".join(p["name"] for p in mb["players"])
+    title = "🏆 <b>Money Ball — resuming</b>"
+    msg = (
+        f"{title}\n"
+        f"<i>{escape(when)} @ {escape(mb['game']['location'])}</i>\n\n"
+        f"<b>Roster:</b> {escape(roster)}\n\n"
+        f"7 rounds · 2 courts · every partner once, every opponent twice. "
+        f"Tap below to open the bracket and start scoring."
+    )
+    bot_username = context.bot_data.get("bot_username")
+    if not bot_username:
+        me = await context.bot.get_me()
+        bot_username = me.username
+        context.bot_data["bot_username"] = bot_username
+    url = _miniapp_launch_link(bot_username, mb_id)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎾 Open Money Ball", url=url)],
+        [InlineKeyboardButton("🗑 Cancel Money Ball", callback_data=f"mb_cancel:{mb_id}")],
+    ])
+    await query.edit_message_text(msg, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
 # ─────────────────────────────────────────────
@@ -314,4 +436,6 @@ def build_moneyball_handlers() -> list:
         CommandHandler("moneyball", cmd_moneyball),
         CommandHandler("leaderboard", cmd_leaderboard),
         CallbackQueryHandler(on_mb_pick, pattern=r"^mb_pick:\d+$"),
+        CallbackQueryHandler(on_mb_cancel, pattern=r"^mb_cancel:\d+$"),
+        CallbackQueryHandler(on_mb_cancel_confirm, pattern=r"^mb_cancel_(yes|no):\d+$"),
     ]
