@@ -283,6 +283,194 @@ def update_game_notes(game_id: int, notes: Optional[str]) -> None:
     _conn.execute("UPDATE games SET notes = ? WHERE id = ?", (notes, game_id))
 
 
+# ─────────────────────────── guest → member merge ─────────────────────────── #
+
+def find_guest_appearances(guest_name: str) -> dict:
+    """Return what would be merged if `guest_name` were promoted to a member.
+
+    Returns:
+      {
+        "guest_name_input": str,            # what the caller passed
+        "match_count": int,                 # how many distinct case-insensitive matches we found
+        "canonical_names": list[str],       # the actual spellings found (for display)
+        "moneyball_entries": int,           # count of moneyball_players rows
+        "participant_entries": int,         # count of participants rows
+        "moneyball_ids": list[int],
+        "game_ids": list[int],
+      }
+    """
+    assert _conn is not None
+    needle = guest_name.strip().lower()
+
+    canonical = _conn.execute(
+        """
+        SELECT DISTINCT name FROM (
+            SELECT guest_name AS name FROM moneyball_players
+                WHERE guest_name IS NOT NULL AND LOWER(TRIM(guest_name)) = ?
+            UNION
+            SELECT guest_name AS name FROM participants
+                WHERE guest_name IS NOT NULL AND LOWER(TRIM(guest_name)) = ?
+        )
+        """,
+        (needle, needle),
+    ).fetchall()
+    canonical_names = [r["name"] for r in canonical]
+
+    mb_rows = _conn.execute(
+        """
+        SELECT id, moneyball_id FROM (
+            SELECT rowid AS id, moneyball_id FROM moneyball_players
+            WHERE LOWER(TRIM(guest_name)) = ?
+        )
+        """,
+        (needle,),
+    ).fetchall()
+    moneyball_ids = sorted({r["moneyball_id"] for r in mb_rows})
+
+    p_rows = _conn.execute(
+        """
+        SELECT id, game_id FROM participants
+        WHERE LOWER(TRIM(guest_name)) = ?
+        """,
+        (needle,),
+    ).fetchall()
+    game_ids = sorted({r["game_id"] for r in p_rows})
+
+    return {
+        "guest_name_input": guest_name,
+        "match_count": len(canonical_names),
+        "canonical_names": canonical_names,
+        "moneyball_entries": len(mb_rows),
+        "participant_entries": len(p_rows),
+        "moneyball_ids": moneyball_ids,
+        "game_ids": game_ids,
+    }
+
+
+def merge_guest_into_member(guest_name: str, member_id: int) -> dict:
+    """Promote every guest entry matching `guest_name` (case-insensitive, trimmed)
+    to belong to `member_id`.
+
+    Constraints to respect:
+      - In `moneyball_players`, a money ball can't have the same member at two
+        seats — if the member already occupies a seat in a money ball that also
+        has the guest, the merge is unsafe for that money ball.
+      - In `participants`, the same member can't be in a game's roster twice
+        (DB enforces this). Skip games where member is already a participant.
+
+    Returns a report:
+      {
+        "merged_moneyball_entries": int,
+        "merged_participant_entries": int,
+        "skipped_moneyball_ids": list[int],   # had a conflict
+        "skipped_game_ids": list[int],        # member already in roster
+        "renamed_moneyball_ids": list[int],   # all touched
+        "renamed_game_ids": list[int],        # all touched
+      }
+    """
+    assert _conn is not None
+    if get_member(member_id) is None:
+        raise ValueError(f"member {member_id} not found")
+
+    needle = guest_name.strip().lower()
+    merged_mb = 0
+    merged_p = 0
+    skipped_mb_ids: list[int] = []
+    skipped_game_ids: list[int] = []
+    touched_mb_ids: set[int] = set()
+    touched_game_ids: set[int] = set()
+
+    with transaction():
+        # ── moneyball_players ──
+        mb_rows = _conn.execute(
+            """
+            SELECT moneyball_id, seat FROM moneyball_players
+            WHERE LOWER(TRIM(guest_name)) = ?
+            """,
+            (needle,),
+        ).fetchall()
+
+        for r in mb_rows:
+            mb_id = r["moneyball_id"]
+            # Conflict? Same member already in this money ball as another seat
+            conflict = _conn.execute(
+                """
+                SELECT 1 FROM moneyball_players
+                WHERE moneyball_id = ? AND member_id = ?
+                """,
+                (mb_id, member_id),
+            ).fetchone()
+            if conflict:
+                skipped_mb_ids.append(mb_id)
+                continue
+            _conn.execute(
+                """
+                UPDATE moneyball_players
+                SET member_id = ?, guest_name = NULL
+                WHERE moneyball_id = ? AND seat = ?
+                """,
+                (member_id, mb_id, r["seat"]),
+            )
+            merged_mb += 1
+            touched_mb_ids.add(mb_id)
+
+        # ── participants (game signups) ──
+        p_rows = _conn.execute(
+            """
+            SELECT id, game_id FROM participants
+            WHERE LOWER(TRIM(guest_name)) = ?
+            """,
+            (needle,),
+        ).fetchall()
+
+        for r in p_rows:
+            game_id = r["game_id"]
+            existing = _conn.execute(
+                "SELECT 1 FROM participants WHERE game_id = ? AND member_id = ?",
+                (game_id, member_id),
+            ).fetchone()
+            if existing:
+                skipped_game_ids.append(game_id)
+                continue
+            _conn.execute(
+                """
+                UPDATE participants
+                SET member_id = ?, guest_name = NULL
+                WHERE id = ?
+                """,
+                (member_id, r["id"]),
+            )
+            merged_p += 1
+            touched_game_ids.add(game_id)
+
+    return {
+        "merged_moneyball_entries": merged_mb,
+        "merged_participant_entries": merged_p,
+        "skipped_moneyball_ids": sorted(set(skipped_mb_ids)),
+        "skipped_game_ids": sorted(set(skipped_game_ids)),
+        "renamed_moneyball_ids": sorted(touched_mb_ids),
+        "renamed_game_ids": sorted(touched_game_ids),
+    }
+
+
+def find_member_by_username_or_id(query: str) -> Optional[dict]:
+    """Resolve a string to a member. Accepts:
+      - "@username" or "username"
+      - "12345" (Telegram user ID)
+    Returns member dict or None.
+    """
+    assert _conn is not None
+    q = query.strip().lstrip("@")
+    # Try numeric ID first
+    if q.isdigit():
+        return get_member(int(q))
+    # Then username (case-insensitive)
+    row = _conn.execute(
+        "SELECT * FROM members WHERE LOWER(username) = LOWER(?)", (q,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def update_game_max(game_id: int, max_players: int) -> dict:
     """Change max_players. Returns {'demoted': [...], 'promoted': [...]}
     so callers can notify the affected members.

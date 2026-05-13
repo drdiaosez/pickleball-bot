@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Money Ball — 8-Player Rotation</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=JetBrains+Mono:wght@400;600&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --paper: #f4ede0;
+    --paper-deep: #ebe1cf;
+    --ink: #1a2238;
+    --ink-soft: #2a3554;
+    --ink-faint: #6b6f7d;
+    --stamp: #b3361f;
+    --stamp-soft: #d6553a;
+    --rule: #1a223855;
+    --rule-faint: #1a223822;
+    --winner: #0c5440;
+    --winner-bg: #d8e3d0;
+    --court: #c7d4cf;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Spectral', Georgia, serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      radial-gradient(circle at 20% 30%, #00000008 0, transparent 40%),
+      radial-gradient(circle at 80% 70%, #00000008 0, transparent 40%),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='3'/><feColorMatrix values='0 0 0 0 0.1, 0 0 0 0 0.13, 0 0 0 0 0.22, 0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    z-index: 1;
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 2;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px 20px 80px;
+  }
+
+  /* ───── HEADER ───── */
+  header {
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 18px;
+    margin-bottom: 24px;
+  }
+  .kicker {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .kicker .dot { color: var(--stamp); }
+  h1 {
+    font-family: 'DM Serif Display', serif;
+    font-weight: 400;
+    font-size: clamp(36px, 7vw, 64px);
+    line-height: 0.95;
+    letter-spacing: -0.01em;
+    margin: 2px 0;
+  }
+  h1 em { font-style: italic; color: var(--stamp); }
+  .subhead {
+    font-family: 'Spectral', serif;
+    font-style: italic;
+    font-size: 15px;
+    color: var(--ink-faint);
+    margin-top: 4px;
+  }
+
+  /* ───── CONTROL BAR ───── */
+  .controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 22px;
+    align-items: center;
+  }
+  .btn {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    background: var(--ink);
+    color: var(--paper);
+    border: none;
+    padding: 11px 16px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border-radius: 0;
+  }
+  .btn:hover { background: var(--stamp); transform: translate(-1px, -1px); box-shadow: 2px 2px 0 var(--ink); }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1.5px solid var(--ink); }
+  .btn.ghost:hover { background: var(--ink); color: var(--paper); }
+  .btn.stamp { background: var(--stamp); }
+  .btn.stamp:hover { background: var(--ink); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn:disabled:hover { transform: none; box-shadow: none; }
+  .seg {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-left: auto;
+  }
+
+  /* ───── SETUP ───── */
+  .setup {
+    border: 1.5px solid var(--ink);
+    background: var(--paper-deep);
+    padding: 22px;
+    margin-bottom: 24px;
+    position: relative;
+  }
+  .setup::before {
+    content: "ENTRY";
+    position: absolute;
+    top: -10px;
+    left: 16px;
+    background: var(--paper);
+    padding: 0 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.24em;
+    color: var(--ink-soft);
+  }
+  .setup-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 600px) { .setup-grid { grid-template-columns: 1fr; } }
+  .field label {
+    display: block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 5px;
+  }
+  .field input {
+    width: 100%;
+    background: var(--paper);
+    border: none;
+    border-bottom: 1.5px solid var(--ink);
+    font-family: 'Spectral', serif;
+    font-size: 17px;
+    color: var(--ink);
+    padding: 6px 0;
+    outline: none;
+  }
+  .field input:focus { border-bottom-color: var(--stamp); }
+  .field .hint {
+    font-size: 12px;
+    color: var(--ink-faint);
+    font-style: italic;
+    margin-top: 4px;
+  }
+  .player-num {
+    display: inline-block;
+    width: 22px;
+    color: var(--stamp);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+  .setup-actions {
+    margin-top: 22px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  /* ───── ROUNDS / MATCHES ───── */
+  .round-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .round-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 32px;
+    font-style: italic;
+  }
+  .round-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .courts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    margin-bottom: 24px;
+  }
+  @media (max-width: 700px) { .courts { grid-template-columns: 1fr; } }
+
+  .court {
+    background: var(--paper);
+    border: 1.5px solid var(--ink);
+    padding: 18px 16px 14px;
+    position: relative;
+    box-shadow: 3px 3px 0 var(--rule-faint);
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .court:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 var(--rule);
+  }
+  .court.scored {
+    background: var(--paper-deep);
+  }
+  .court-label {
+    position: absolute;
+    top: -10px;
+    left: 14px;
+    background: var(--paper);
+    padding: 0 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.24em;
+    color: var(--ink-faint);
+  }
+
+  .team {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 4px;
+    min-height: 38px;
+  }
+  .team + .vs {
+    text-align: center;
+    font-family: 'DM Serif Display', serif;
+    font-style: italic;
+    color: var(--ink-faint);
+    font-size: 17px;
+    padding: 2px 0;
+    border-top: 1px dashed var(--rule);
+    border-bottom: 1px dashed var(--rule);
+  }
+  .team .names {
+    font-family: 'Spectral', serif;
+    font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding-right: 10px;
+    flex: 1;
+  }
+  .team .score {
+    font-family: 'DM Serif Display', serif;
+    font-size: 26px;
+    min-width: 38px;
+    text-align: right;
+    color: var(--ink);
+    font-weight: 400;
+  }
+  .team.winner .score { color: var(--winner); }
+  .team.winner .names { font-weight: 500; color: var(--winner); }
+  .team .score.unset { color: var(--ink-faint); font-style: italic; font-size: 18px; }
+
+  .round-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 8px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .round-nav {
+    display: flex;
+    gap: 8px;
+  }
+
+  /* ───── STANDINGS ───── */
+  .standings {
+    border: 1.5px solid var(--ink);
+    background: var(--paper);
+    padding: 0;
+    margin-top: 24px;
+    overflow-x: auto;
+    position: relative;
+  }
+  .standings-title {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 10px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .standings-title .note {
+    font-family: 'Spectral', serif;
+    font-style: italic;
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 13px;
+    color: var(--paper-deep);
+  }
+  table.st {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'Spectral', serif;
+  }
+  table.st th, table.st td {
+    padding: 9px 14px;
+    text-align: right;
+    font-size: 15px;
+    border-bottom: 1px solid var(--rule-faint);
+  }
+  table.st th {
+    background: var(--paper-deep);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    border-bottom: 1.5px solid var(--ink);
+  }
+  table.st td.name, table.st th.name {
+    text-align: left;
+    font-family: 'Spectral', serif;
+    font-size: 16px;
+  }
+  table.st td.rank {
+    text-align: center;
+    font-family: 'DM Serif Display', serif;
+    color: var(--stamp);
+    font-style: italic;
+    width: 36px;
+  }
+  table.st tr.leader td {
+    background: var(--winner-bg);
+  }
+  table.st tr.leader td.name {
+    font-weight: 500;
+    color: var(--winner);
+  }
+  table.st tr.leader td.rank {
+    color: var(--winner);
+  }
+
+  /* ───── CHAMPION ───── */
+  .champion {
+    margin-top: 30px;
+    text-align: center;
+    padding: 26px 18px;
+    border: 2px solid var(--ink);
+    background: var(--paper-deep);
+    position: relative;
+  }
+  .champion-stamp {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    color: var(--stamp);
+    border: 1.5px solid var(--stamp);
+    padding: 4px 8px;
+    transform: rotate(4deg);
+    opacity: 0.85;
+  }
+  .champion-kicker {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--stamp);
+    margin-bottom: 8px;
+  }
+  .champion-name {
+    font-family: 'DM Serif Display', serif;
+    font-size: clamp(30px, 5vw, 46px);
+    line-height: 1;
+  }
+  .champion-stats {
+    margin-top: 8px;
+    font-family: 'Spectral', serif;
+    font-style: italic;
+    color: var(--ink-faint);
+  }
+
+  /* ───── SCORE MODAL ───── */
+  .modal-back {
+    position: fixed;
+    inset: 0;
+    background: #1a223899;
+    backdrop-filter: blur(2px);
+    z-index: 100;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-back.open { display: flex; }
+  .modal {
+    background: var(--paper);
+    border: 2px solid var(--ink);
+    max-width: 440px;
+    width: 100%;
+    padding: 24px;
+    box-shadow: 6px 6px 0 var(--ink);
+  }
+  .modal h2 {
+    font-family: 'DM Serif Display', serif;
+    font-weight: 400;
+    font-size: 26px;
+    line-height: 1.1;
+    margin-bottom: 4px;
+  }
+  .modal .sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 18px;
+  }
+  .score-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 0;
+  }
+  .score-row .team-label {
+    font-size: 14px;
+    font-family: 'Spectral', serif;
+    text-align: center;
+    color: var(--ink-soft);
+  }
+  .score-row input {
+    width: 100%;
+    text-align: center;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid var(--ink);
+    font-family: 'DM Serif Display', serif;
+    font-size: 44px;
+    color: var(--ink);
+    outline: none;
+    padding: 4px 0;
+  }
+  .score-row input:focus { border-bottom-color: var(--stamp); }
+  .score-row .vs {
+    font-family: 'DM Serif Display', serif;
+    font-style: italic;
+    font-size: 22px;
+    color: var(--ink-faint);
+    align-self: end;
+    padding-bottom: 12px;
+  }
+  .modal-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    margin-top: 18px;
+    flex-wrap: wrap;
+  }
+
+  .empty {
+    text-align: center;
+    padding: 50px 18px;
+    color: var(--ink-faint);
+    font-style: italic;
+    font-size: 17px;
+  }
+
+  .colophon {
+    margin-top: 50px;
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .colophon .rule {
+    width: 60px;
+    height: 1px;
+    background: var(--ink-faint);
+    margin: 10px auto;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="kicker">
+      <span>Vol. II &nbsp;·&nbsp; The Pickleball Society</span>
+      <span><span class="dot">●</span> <span id="env-label">browser preview</span></span>
+    </div>
+    <h1>Money <em>Ball</em></h1>
+    <p class="subhead">A rotating eight-player exhibition in seven rounds — every partner once, every opponent twice.</p>
+  </header>
+
+  <div class="controls">
+    <button class="btn ghost" id="btn-share">📤 Share Results</button>
+    <span class="seg" id="seg-meta">loading…</span>
+  </div>
+
+
+  <!-- Tournament view -->
+  <section id="tournament-view">
+    <div class="empty" id="empty-state">
+      Loading…
+      <br/><br/>
+      <i>Connecting to the bot</i>
+    </div>
+
+    <div id="tournament-content" style="display:none;">
+      <div class="round-header">
+        <div class="round-title" id="round-title">Round 1</div>
+        <div class="round-meta" id="round-meta"></div>
+      </div>
+
+      <div class="courts" id="courts"></div>
+
+      <div class="round-actions">
+        <div class="round-nav">
+          <button class="btn ghost" id="btn-prev">← Prev round</button>
+          <button class="btn ghost" id="btn-next">Next round →</button>
+        </div>
+        <span class="seg" id="round-progress"></span>
+      </div>
+
+      <div class="standings" id="standings"></div>
+
+      <div class="champion" id="champion" style="display:none;">
+        <div class="champion-stamp">CHAMPION</div>
+        <div class="champion-kicker">Winner of Record</div>
+        <div class="champion-name" id="champion-name">—</div>
+        <div class="champion-stats" id="champion-stats">—</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="colophon">
+    <div>Tap any court to record a score &nbsp;·&nbsp; Win by 1 to 11, or whatever the clock allows</div>
+    <div class="rule"></div>
+    <div>Telegram Mini App · v0.1</div>
+  </div>
+</div>
+
+<!-- Score modal -->
+<div class="modal-back" id="modal-back">
+  <div class="modal">
+    <h2 id="modal-title">Record Result</h2>
+    <div class="sub" id="modal-sub">Round 1 · Court 1</div>
+    <div class="score-row">
+      <div>
+        <input type="number" inputmode="numeric" min="0" max="99" id="score-a" />
+        <div class="team-label" id="label-a">Team A</div>
+      </div>
+      <div class="vs">vs</div>
+      <div>
+        <input type="number" inputmode="numeric" min="0" max="99" id="score-b" />
+        <div class="team-label" id="label-b">Team B</div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="modal-clear">Clear</button>
+      <button class="btn ghost" id="modal-cancel">Cancel</button>
+      <button class="btn stamp" id="modal-save">Save Result</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ─────────────────────────────────────────────
+   Live API-driven Mini App.
+   - mb_id comes from the URL path /moneyball/<id>
+   - Boots by GETting /api/moneyball/<id> with Telegram initData
+   - Scores POST to /api/moneyball/<id>/score
+   - Polls every 4s for live updates from other players
+   ───────────────────────────────────────────── */
+
+const tg = window.Telegram?.WebApp;
+let inTelegram = false;
+if (tg && tg.initData) {
+  tg.ready();
+  tg.expand();
+  inTelegram = true;
+  document.getElementById('env-label').textContent = 'live in telegram';
+}
+
+const SCHEDULE = [
+  [[[0, 1], [2, 3]], [[4, 5], [6, 7]]],
+  [[[0, 2], [4, 6]], [[1, 3], [5, 7]]],
+  [[[0, 3], [4, 7]], [[1, 2], [5, 6]]],
+  [[[0, 4], [1, 5]], [[2, 6], [3, 7]]],
+  [[[0, 5], [2, 7]], [[1, 4], [3, 6]]],
+  [[[0, 6], [3, 5]], [[1, 7], [2, 4]]],
+  [[[0, 7], [1, 6]], [[2, 5], [3, 4]]],
+];
+const TOTAL_ROUNDS = SCHEDULE.length;
+const POLL_INTERVAL_MS = 4000;
+
+// Extract moneyball id from URL: /moneyball/42
+const pathParts = window.location.pathname.split('/').filter(Boolean);
+const MB_ID = pathParts[pathParts.length - 1];
+
+let state = null;           // { moneyball, standings, schedule }
+let modalContext = null;
+let viewingRound = 0;
+let pollHandle = null;
+let lastSavedAt = 0;        // we just POSTed; ignore the next poll to avoid clobbering an open modal
+
+/* ─── API ─── */
+async function apiGet() {
+  const res = await fetch(`/api/moneyball/${MB_ID}`, {
+    headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function apiPostScore(round, court, scoreA, scoreB) {
+  const res = await fetch(`/api/moneyball/${MB_ID}/score`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Telegram-Init-Data': tg?.initData || '',
+    },
+    body: JSON.stringify({ round, court, scoreA, scoreB }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/* ─── boot ─── */
+async function boot() {
+  try {
+    const data = await apiGet();
+    state = data;
+    viewingRound = currentRoundIndex();
+    render();
+    startPolling();
+  } catch (e) {
+    console.error('boot failed', e);
+    showError('Could not load tournament. ' + e.message + ' — try closing and reopening.');
+  }
+}
+
+function showError(msg) {
+  document.getElementById('empty-state').innerHTML =
+    `<strong>Error</strong><br/><br/>${escapeHtml(msg)}`;
+  document.getElementById('empty-state').style.display = 'block';
+  document.getElementById('tournament-content').style.display = 'none';
+}
+
+/* ─── polling for live updates ─── */
+function startPolling() {
+  if (pollHandle) clearInterval(pollHandle);
+  pollHandle = setInterval(async () => {
+    // Skip if a modal is open (user is editing) or we just saved
+    if (modalContext) return;
+    if (Date.now() - lastSavedAt < 2000) return;
+    try {
+      const data = await apiGet();
+      // Only re-render if something actually changed
+      if (JSON.stringify(data.moneyball.matches) !== JSON.stringify(state.moneyball.matches) ||
+          data.moneyball.status !== state.moneyball.status) {
+        state = data;
+        render();
+      }
+    } catch (e) {
+      // silently ignore poll failures
+    }
+  }, POLL_INTERVAL_MS);
+}
+
+function currentRoundIndex() {
+  const ms = state.moneyball.matches;
+  for (let r = 0; r < TOTAL_ROUNDS; r++) {
+    const allDone = ms[r].every(m => m.scoreA !== null && m.scoreB !== null);
+    if (!allDone) return r;
+  }
+  return TOTAL_ROUNDS - 1;
+}
+
+function isComplete() {
+  return state.moneyball.status === 'completed';
+}
+
+/* ─── rendering ─── */
+function render() {
+  if (!state) return;
+  const empty = document.getElementById('empty-state');
+  const content = document.getElementById('tournament-content');
+  empty.style.display = 'none';
+  content.style.display = 'block';
+
+  const mb = state.moneyball;
+  const players = mb.players;  // [{seat, member_id, name}]
+  const nameForSeat = (seat) => {
+    const p = players.find(pp => pp.seat === seat);
+    if (!p) return '?';
+    return p.is_guest ? `${p.name} (guest)` : p.name;
+  };
+
+  // Header
+  document.getElementById('round-title').textContent = `Round ${viewingRound + 1}`;
+  document.getElementById('round-meta').textContent =
+    viewingRound + 1 === TOTAL_ROUNDS ? 'Final round' :
+    viewingRound + 1 === TOTAL_ROUNDS - 1 ? 'Semifinal' :
+    `${TOTAL_ROUNDS - viewingRound - 1} rounds remaining`;
+
+  // Courts
+  const courtsEl = document.getElementById('courts');
+  courtsEl.innerHTML = '';
+  SCHEDULE[viewingRound].forEach((match, courtIdx) => {
+    const [teamA, teamB] = match;
+    const sr = mb.matches[viewingRound][courtIdx];
+    const scored = sr.scoreA !== null && sr.scoreB !== null;
+    const aWins = scored && sr.scoreA > sr.scoreB;
+    const bWins = scored && sr.scoreB > sr.scoreA;
+    const namesA = teamA.map(nameForSeat).join(' / ');
+    const namesB = teamB.map(nameForSeat).join(' / ');
+
+    const courtEl = document.createElement('div');
+    courtEl.className = 'court' + (scored ? ' scored' : '');
+    courtEl.innerHTML = `
+      <div class="court-label">COURT ${courtIdx + 1}</div>
+      <div class="team ${aWins ? 'winner' : ''}">
+        <span class="names">${escapeHtml(namesA)}</span>
+        <span class="score ${scored ? '' : 'unset'}">${scored ? sr.scoreA : '—'}</span>
+      </div>
+      <div class="vs">vs</div>
+      <div class="team ${bWins ? 'winner' : ''}">
+        <span class="names">${escapeHtml(namesB)}</span>
+        <span class="score ${scored ? '' : 'unset'}">${scored ? sr.scoreB : '—'}</span>
+      </div>
+    `;
+    courtEl.addEventListener('click', () => openScoreModal(viewingRound, courtIdx));
+    courtsEl.appendChild(courtEl);
+  });
+
+  document.getElementById('btn-prev').disabled = viewingRound === 0;
+  document.getElementById('btn-next').disabled = viewingRound === TOTAL_ROUNDS - 1;
+
+  const totalMatches = TOTAL_ROUNDS * 2;
+  const completed = mb.matches.flat().filter(m => m.scoreA !== null && m.scoreB !== null).length;
+  document.getElementById('round-progress').textContent = `${completed}/${totalMatches} matches played`;
+  document.getElementById('seg-meta').textContent = `Money Ball · ${completed}/${totalMatches}`;
+
+  renderStandings();
+
+  if (isComplete()) {
+    const winner = state.standings[0];
+    document.getElementById('champion').style.display = 'block';
+    document.getElementById('champion-name').textContent = winner.name;
+    document.getElementById('champion-stats').textContent =
+      `${winner.wins}–${winner.losses} · diff ${winner.diff > 0 ? '+' : ''}${winner.diff}`;
+    if (inTelegram && tg.HapticFeedback) {
+      try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
+    }
+  } else {
+    document.getElementById('champion').style.display = 'none';
+  }
+}
+
+function renderStandings() {
+  const st = state.standings;
+  const titleNote = isComplete()
+    ? 'final'
+    : 'live · wins, then point differential';
+
+  let html = `<div class="standings-title"><span>Standings</span><span class="note">${titleNote}</span></div>`;
+  html += `<table class="st">
+    <thead><tr>
+      <th class="rank">#</th><th class="name">Player</th>
+      <th>W</th><th>L</th><th>Pts For</th><th>Pts Agst</th><th>Diff</th>
+    </tr></thead><tbody>`;
+  st.forEach((s, i) => {
+    const isWinner = isComplete() && i === 0;
+    html += `<tr class="${isWinner ? 'leader' : ''}">
+      <td class="rank">${i + 1}</td>
+      <td class="name">${escapeHtml(s.name)}${s.is_guest ? ' <span style="color:var(--ink-faint);font-style:italic;font-size:13px;">(guest)</span>' : ''}</td>
+      <td>${s.wins}</td><td>${s.losses}</td>
+      <td>${s.points_for}</td><td>${s.points_against}</td>
+      <td>${s.diff > 0 ? '+' : ''}${s.diff}</td>
+    </tr>`;
+  });
+  html += `</tbody></table>`;
+  document.getElementById('standings').innerHTML = html;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"\']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+/* ─── modal ─── */
+function openScoreModal(roundIdx, courtIdx) {
+  modalContext = { roundIdx, courtIdx };
+  const mb = state.moneyball;
+  const players = mb.players;
+  const nameForSeat = (seat) => {
+    const p = players.find(pp => pp.seat === seat);
+    if (!p) return '?';
+    return p.is_guest ? `${p.name} (guest)` : p.name;
+  };
+  const [teamA, teamB] = SCHEDULE[roundIdx][courtIdx];
+  const sr = mb.matches[roundIdx][courtIdx];
+  document.getElementById('modal-title').textContent = `Round ${roundIdx + 1} · Court ${courtIdx + 1}`;
+  document.getElementById('modal-sub').textContent = 'Record final score';
+  document.getElementById('label-a').textContent = teamA.map(nameForSeat).join(' / ');
+  document.getElementById('label-b').textContent = teamB.map(nameForSeat).join(' / ');
+  document.getElementById('score-a').value = sr.scoreA ?? '';
+  document.getElementById('score-b').value = sr.scoreB ?? '';
+  document.getElementById('modal-back').classList.add('open');
+  setTimeout(() => document.getElementById('score-a').focus(), 100);
+}
+
+function closeModal() {
+  document.getElementById('modal-back').classList.remove('open');
+  modalContext = null;
+}
+
+document.getElementById('modal-cancel').addEventListener('click', closeModal);
+document.getElementById('modal-clear').addEventListener('click', async () => {
+  if (!modalContext) return;
+  try {
+    const data = await apiPostScore(modalContext.roundIdx + 1, modalContext.courtIdx + 1, null, null);
+    state = data;
+    lastSavedAt = Date.now();
+    render();
+  } catch (e) {
+    alert('Failed to clear: ' + e.message);
+  }
+  closeModal();
+});
+document.getElementById('modal-back').addEventListener('click', (e) => {
+  if (e.target.id === 'modal-back') closeModal();
+});
+document.getElementById('modal-save').addEventListener('click', async () => {
+  if (!modalContext) return;
+  const a = parseInt(document.getElementById('score-a').value, 10);
+  const b = parseInt(document.getElementById('score-b').value, 10);
+  if (isNaN(a) || isNaN(b) || a < 0 || b < 0) {
+    alert('Enter valid scores (0 or higher).'); return;
+  }
+  if (a === b) {
+    alert('Scores cannot tie. Win by 1.'); return;
+  }
+  try {
+    const data = await apiPostScore(modalContext.roundIdx + 1, modalContext.courtIdx + 1, a, b);
+    state = data;
+    lastSavedAt = Date.now();
+    render();
+    closeModal();
+  } catch (e) {
+    alert('Failed to save: ' + e.message);
+  }
+});
+
+document.getElementById('btn-prev').addEventListener('click', () => {
+  if (viewingRound > 0) { viewingRound--; render(); }
+});
+document.getElementById('btn-next').addEventListener('click', () => {
+  if (viewingRound < TOTAL_ROUNDS - 1) { viewingRound++; render(); }
+});
+
+document.getElementById('btn-share').addEventListener('click', () => {
+  if (!state) return;
+  const mb = state.moneyball;
+  const players = mb.players;
+  const nameForSeat = (seat) => {
+    const p = players.find(pp => pp.seat === seat);
+    if (!p) return '?';
+    return p.is_guest ? `${p.name} (guest)` : p.name;
+  };
+  const lines = [`🏆 Money Ball`, ''];
+  mb.matches.forEach((round, r) => {
+    lines.push(`— ROUND ${r + 1} —`);
+    round.forEach((m, c) => {
+      const [teamA, teamB] = SCHEDULE[r][c];
+      const a = teamA.map(nameForSeat).join(' / ');
+      const b = teamB.map(nameForSeat).join(' / ');
+      const sa = m.scoreA ?? '–';
+      const sb = m.scoreB ?? '–';
+      const wA = m.scoreA !== null && m.scoreA > m.scoreB ? '✓' : ' ';
+      const wB = m.scoreB !== null && m.scoreB > m.scoreA ? '✓' : ' ';
+      lines.push(`  Court ${c+1}: ${wA} ${a} ${sa}  —  ${wB} ${b} ${sb}`);
+    });
+    lines.push('');
+  });
+  lines.push('— STANDINGS —');
+  state.standings.forEach((s, i) => {
+    lines.push(`${i+1}. ${s.name}  ${s.wins}-${s.losses}  diff ${s.diff > 0 ? '+' : ''}${s.diff}`);
+  });
+  const text = lines.join('\n');
+  if (inTelegram && tg.sendData) {
+    tg.sendData(JSON.stringify({ action: 'share_moneyball', text }));
+    tg.close();
+  } else if (navigator.share) {
+    navigator.share({ text });
+  } else {
+    navigator.clipboard.writeText(text);
+    alert('Results copied to clipboard.');
+  }
+});
+
+boot();
+</script>
+</body>
+</html>
