@@ -14,7 +14,7 @@ import random
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 from telegram.helpers import escape
@@ -171,8 +171,11 @@ async def _post_launch_card(
     )
 
     url = _miniapp_url(mb_id)
+    # Use a URL button (works in group chats). The domain is registered with
+    # BotFather as a Mini App domain, so tapping it still opens inside Telegram
+    # as a Mini App. web_app= buttons only work in private chats.
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🎾 Open Money Ball", web_app=WebAppInfo(url=url))
+        InlineKeyboardButton("🎾 Open Money Ball", url=url)
     ]])
     await update.effective_message.reply_html(msg, reply_markup=kb)
 
