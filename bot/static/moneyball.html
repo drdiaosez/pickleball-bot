@@ -634,9 +634,17 @@ const SCHEDULE = [
 const TOTAL_ROUNDS = SCHEDULE.length;
 const POLL_INTERVAL_MS = 4000;
 
-// Extract moneyball id from URL: /moneyball/42
-const pathParts = window.location.pathname.split('/').filter(Boolean);
-const MB_ID = pathParts[pathParts.length - 1];
+// Extract moneyball id. Prefer Telegram's start_param (set via t.me/<bot>/<app>?startapp=N)
+// since that's how the launcher button passes it. Fall back to URL path for direct API/dev access.
+function getMbId() {
+  const fromTelegram = tg?.initDataUnsafe?.start_param;
+  if (fromTelegram) return fromTelegram;
+  const pathParts = window.location.pathname.split('/').filter(Boolean);
+  const last = pathParts[pathParts.length - 1];
+  // Don't return the literal "moneyball" segment when the path is just /moneyball
+  return last && last !== 'moneyball' ? last : null;
+}
+const MB_ID = getMbId();
 
 let state = null;           // { moneyball, standings, schedule }
 let modalContext = null;
@@ -674,6 +682,10 @@ async function apiPostScore(round, court, scoreA, scoreB) {
 
 /* ─── boot ─── */
 async function boot() {
+  if (!MB_ID) {
+    showError('No tournament ID provided. Open this from a Money Ball launcher in your group chat.');
+    return;
+  }
   try {
     const data = await apiGet();
     state = data;

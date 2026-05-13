@@ -221,7 +221,8 @@ def create_app(bot_token: str, completion_callback) -> web.Application:
     app["completion_callback"] = completion_callback
 
     app.router.add_get("/", health)
-    app.router.add_get("/moneyball/{mb_id}", serve_miniapp)
+    app.router.add_get("/moneyball", serve_miniapp)         # used by Telegram deep links (id in start_param)
+    app.router.add_get("/moneyball/{mb_id}", serve_miniapp) # legacy/direct access
     app.router.add_get("/api/moneyball/{mb_id}", get_moneyball)
     app.router.add_post("/api/moneyball/{mb_id}/score", post_score)
 

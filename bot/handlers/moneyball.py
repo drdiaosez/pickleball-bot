@@ -32,10 +32,27 @@ def _public_url() -> str:
 
 
 def _miniapp_url(mb_id: int) -> str:
+    """Direct URL to the Mini App HTML — used by the API server, not the launcher button."""
     base = _public_url()
     if not base:
         return ""
     return f"{base}/moneyball/{mb_id}"
+
+
+def _miniapp_launch_link(bot_username: str, mb_id: int) -> str:
+    """Construct a t.me deep link that opens the Mini App inside Telegram.
+
+    Telegram requires this format (not a direct domain URL) to launch a
+    registered Mini App from a URL button in a group chat:
+
+      https://t.me/<bot>/<appname>?startapp=<param>
+
+    The bot username and the app's short name (registered via BotFather
+    /newapp) come from env vars. The mb_id is passed as the startapp param;
+    the Mini App reads it via Telegram.WebApp.initDataUnsafe.start_param.
+    """
+    app_short_name = os.environ.get("MINIAPP_SHORT_NAME", "play")
+    return f"https://t.me/{bot_username}/{app_short_name}?startapp={mb_id}"
 
 
 # ─────────────────────────────────────────────
@@ -170,10 +187,15 @@ async def _post_launch_card(
         f"Tap below to open the bracket and start scoring."
     )
 
-    url = _miniapp_url(mb_id)
-    # Use a URL button (works in group chats). The domain is registered with
-    # BotFather as a Mini App domain, so tapping it still opens inside Telegram
-    # as a Mini App. web_app= buttons only work in private chats.
+    # Build the deep-link URL. The bot's username drives this — we cache it
+    # in bot_data after the first call so we don't hit the API every time.
+    bot_username = context.bot_data.get("bot_username")
+    if not bot_username:
+        me = await context.bot.get_me()
+        bot_username = me.username
+        context.bot_data["bot_username"] = bot_username
+
+    url = _miniapp_launch_link(bot_username, mb_id)
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("🎾 Open Money Ball", url=url)
     ]])
