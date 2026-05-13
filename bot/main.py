@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from telegram.ext import Application, CommandHandler
 
 from . import db, moneyball, http_server
-from .handlers import common, games, moneyball as mb_handlers, merge, newgame, roster
+from .handlers import common, games, moneyball as mb_handlers, merge, newgame, roster, chat_events
 
 
 async def amain() -> None:
@@ -77,6 +77,11 @@ async def amain() -> None:
     for h in roster.build_roster_handlers():
         app.add_handler(h)
 
+    # my_chat_member / chat_member events — register AFTER command handlers,
+    # since these are non-command updates and won't conflict.
+    for h in chat_events.build_chat_event_handlers():
+        app.add_handler(h)
+
     app.add_error_handler(common.error_handler)
 
     # ─── HTTP server setup ───
@@ -91,7 +96,9 @@ async def amain() -> None:
     log.info("Bot starting…")
     await app.initialize()
     await app.start()
-    await app.updater.start_polling(allowed_updates=["message", "callback_query"])
+    await app.updater.start_polling(
+        allowed_updates=["message", "callback_query", "my_chat_member", "chat_member"]
+    )
     log.info("Telegram polling started")
 
     http_runner = await http_server.run_http_server(http_app, http_host, http_port)

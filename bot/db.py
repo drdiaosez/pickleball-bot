@@ -129,6 +129,113 @@ def get_member(telegram_id: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
+# ─────────────────────── chats / chat_members ─────────────────────── #
+
+def get_chat(telegram_chat_id: int) -> Optional[dict]:
+    """Fetch the chats row, or None."""
+    assert _conn is not None
+    row = _conn.execute(
+        "SELECT * FROM chats WHERE telegram_chat_id = ?", (telegram_chat_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_chat(telegram_chat_id: int, title: Optional[str] = None, status: str = "active") -> None:
+    """Create or update a chats row. Doesn't overwrite an existing title with NULL."""
+    assert _conn is not None
+    _conn.execute(
+        """
+        INSERT INTO chats (telegram_chat_id, title, status)
+        VALUES (?, ?, ?)
+        ON CONFLICT(telegram_chat_id) DO UPDATE SET
+            title  = COALESCE(excluded.title, chats.title),
+            status = excluded.status
+        """,
+        (telegram_chat_id, title, status),
+    )
+
+
+def update_chat_status(telegram_chat_id: int, status: str) -> None:
+    assert _conn is not None
+    _conn.execute(
+        "UPDATE chats SET status = ? WHERE telegram_chat_id = ?",
+        (status, telegram_chat_id),
+    )
+
+
+def is_chat_active(telegram_chat_id: int) -> bool:
+    """True iff the chats row exists and status = 'active'."""
+    row = get_chat(telegram_chat_id)
+    return bool(row and row.get("status") == "active")
+
+
+def list_active_chats_for_user(user_id: int) -> list[dict]:
+    """All active chats this user is a member of, ordered by joined_at.
+    Used by the DM picker in PR 4."""
+    assert _conn is not None
+    rows = _conn.execute(
+        """
+        SELECT c.* FROM chats c
+        JOIN chat_members cm ON cm.chat_id = c.telegram_chat_id
+        WHERE cm.telegram_user_id = ? AND c.status = 'active'
+        ORDER BY cm.joined_at ASC
+        """,
+        (user_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_chat_member(chat_id: int, user_id: int) -> Optional[dict]:
+    assert _conn is not None
+    row = _conn.execute(
+        "SELECT * FROM chat_members WHERE chat_id = ? AND telegram_user_id = ?",
+        (chat_id, user_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_chat_member(
+    chat_id: int,
+    user_id: int,
+    role: str = "member",
+    telegram_role_checked_at: Optional[str] = None,
+) -> None:
+    """Insert or update a chat_members row.
+
+    Updates `role` and `telegram_role_checked_at` on conflict, but doesn't
+    touch joined_at (preserves the original join timestamp).
+    """
+    assert _conn is not None
+    _conn.execute(
+        """
+        INSERT INTO chat_members (chat_id, telegram_user_id, role, telegram_role_checked_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(chat_id, telegram_user_id) DO UPDATE SET
+            role = excluded.role,
+            telegram_role_checked_at = COALESCE(
+                excluded.telegram_role_checked_at,
+                chat_members.telegram_role_checked_at
+            )
+        """,
+        (chat_id, user_id, role, telegram_role_checked_at),
+    )
+
+
+def remove_chat_member(chat_id: int, user_id: int) -> None:
+    """Used when Telegram tells us a user left or was kicked."""
+    assert _conn is not None
+    _conn.execute(
+        "DELETE FROM chat_members WHERE chat_id = ? AND telegram_user_id = ?",
+        (chat_id, user_id),
+    )
+
+
+def user_is_chat_admin(chat_id: int, user_id: int) -> bool:
+    """Cached admin check. Callers needing freshness should sync first."""
+    row = get_chat_member(chat_id, user_id)
+    return bool(row and row.get("role") == "admin")
+
+
 # ─────────────────────────── games ─────────────────────────── #
 
 def create_game(

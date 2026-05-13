@@ -35,7 +35,13 @@ HELP_TEXT = (
 # ─────────────────────── authorization ─────────────────────── #
 
 def _allowed_group_id() -> Optional[int]:
-    """The group chat ID the bot is locked to, or None if unconfigured."""
+    """Legacy: the group chat ID the bot was originally locked to via .env.
+
+    Only used as a fallback during the transition: if ALLOWED_GROUP_ID is set
+    AND no chats are registered yet (fresh install), we permit that one group
+    so the migration path stays smooth. Once migration 001 has run and
+    populated the chats table, this fallback is effectively unused.
+    """
     raw = os.environ.get("ALLOWED_GROUP_ID", "").strip()
     if not raw:
         return None
@@ -49,36 +55,43 @@ def _allowed_group_id() -> Optional[int]:
 def is_authorized(update: Update) -> bool:
     """Return True if this update is allowed to use the bot.
 
-    Rules:
-      - If ALLOWED_GROUP_ID is unset, log the chat ID and allow (setup mode).
-      - Messages in the allowed group → allowed.
-      - DMs from a user whose telegram_id is in the members table → allowed
-        (i.e., they've previously interacted via the group).
-      - Anything else (DMs from strangers, other groups) → denied.
+    Multi-chat rules:
+      - Group/supergroup chat → allowed iff the chat is registered AND active.
+        Unregistered groups are silently ignored (logged but no response).
+      - DM → allowed iff the user is a member of at least one active chat.
+        (PR 4 will add the "which chat?" picker on top of this.)
+      - Anything else → denied.
+
+    Legacy fallback: if the chats table is empty and ALLOWED_GROUP_ID is set,
+    behave like the old single-group bot. This only kicks in for setups that
+    haven't had any chat registered yet.
     """
-    allowed = _allowed_group_id()
     chat = update.effective_chat
     user = update.effective_user
     if not chat or not user:
         return False
 
-    if allowed is None:
-        # Setup mode: log chat IDs so the operator can find theirs
+    # Group / supergroup: must be registered and active.
+    if chat.type in ("group", "supergroup"):
+        if db.is_chat_active(chat.id):
+            return True
+        # Legacy fallback for the original single-group setup
+        legacy = _allowed_group_id()
+        if legacy is not None and chat.id == legacy:
+            return True
         log.info(
-            "AUTH (setup mode — set ALLOWED_GROUP_ID in .env to lock down): "
-            "chat_id=%s chat_type=%s chat_title=%r user_id=%s",
-            chat.id, chat.type, getattr(chat, "title", None), user.id,
+            "AUTH: ignoring unregistered group chat_id=%s title=%r user_id=%s",
+            chat.id, getattr(chat, "title", None), user.id,
         )
-        return True
+        return False
 
-    # Messages in the allowed group — open to anyone in the group
-    if chat.id == allowed:
-        return True
-
-    # DMs to the bot — only allow if the user is a known member.
-    # (chat.type == "private" and chat.id == user.id in DMs)
+    # DM: allowed if the user belongs to any active chat.
     if chat.type == "private":
-        if db.get_member(user.id) is not None:
+        if db.list_active_chats_for_user(user.id):
+            return True
+        # Legacy fallback: known member of the single legacy chat
+        legacy = _allowed_group_id()
+        if legacy is not None and db.get_member(user.id) is not None:
             return True
 
     log.info(
@@ -91,20 +104,34 @@ def is_authorized(update: Update) -> bool:
 async def gate(update: Update) -> bool:
     """Use at the top of every handler: `if not await gate(update): return`.
 
-    Sends a polite denial message to unauthorized users so they understand
-    why the bot isn't responding.
+    Also syncs chat membership as a side effect when authorized in a group —
+    keeps chat_members fresh without every handler having to remember.
     """
-    if is_authorized(update):
-        return True
-    if update.effective_message:
+    if not is_authorized(update):
+        if update.effective_message:
+            try:
+                await update.effective_message.reply_text(
+                    "Sorry, this bot only works in groups it's been added to. "
+                    "Ask whoever runs the bot to add it to your group."
+                )
+            except Exception:
+                pass
+        return False
+
+    # Live membership sync for group chats. Best-effort: if Telegram is slow
+    # or the call fails, we don't block the user's command.
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat and user and chat.type in ("group", "supergroup"):
         try:
-            await update.effective_message.reply_text(
-                "Sorry, this bot is private to a specific group. "
-                "If you're in that group, send any command there first."
-            )
+            # Late import to avoid circular dependency with bot.chats
+            from .. import chats as chats_mod
+            await chats_mod.ensure_chat_registered(update.get_bot(), chat)
+            await chats_mod.sync_user_in_chat(update.get_bot(), chat.id, user.id)
         except Exception:
-            pass
-    return False
+            log.exception("Membership sync failed for chat=%s user=%s", chat.id, user.id)
+
+    return True
 
 
 # ─────────────────────── commands ─────────────────────── #
