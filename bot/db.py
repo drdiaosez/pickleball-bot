@@ -20,13 +20,19 @@ _conn: Optional[sqlite3.Connection] = None
 
 
 def init_db(path: str) -> None:
-    """Open the connection and create tables if they don't exist."""
+    """Open the connection and create tables if they don't exist,
+    then run any pending migrations."""
     global _conn
     _conn = sqlite3.connect(path, detect_types=sqlite3.PARSE_DECLTYPES, isolation_level=None)
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA foreign_keys = ON")
     _conn.execute("PRAGMA journal_mode = WAL")  # better concurrency
     _create_schema()
+    # Migrations run AFTER base schema creation. They handle upgrades on
+    # existing databases; new databases get whatever the current migrations
+    # produce on top of the base schema.
+    from . import _migrations
+    _migrations.apply_all(_conn)
 
 
 def _create_schema() -> None:

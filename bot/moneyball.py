@@ -44,6 +44,7 @@ def init_moneyball_schema() -> None:
         CREATE TABLE IF NOT EXISTS moneyballs (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             game_id       INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            chat_id       INTEGER,
             status        TEXT NOT NULL DEFAULT 'in_progress',  -- in_progress|completed
             created_by    INTEGER NOT NULL REFERENCES members(telegram_id),
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
@@ -51,6 +52,7 @@ def init_moneyball_schema() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_mb_game ON moneyballs(game_id);
         CREATE INDEX IF NOT EXISTS idx_mb_status ON moneyballs(status);
+        CREATE INDEX IF NOT EXISTS idx_mb_chat ON moneyballs(chat_id);
 
         CREATE TABLE IF NOT EXISTS moneyball_players (
             moneyball_id INTEGER NOT NULL REFERENCES moneyballs(id) ON DELETE CASCADE,
@@ -106,6 +108,20 @@ def init_moneyball_schema() -> None:
             COMMIT;
             """
         )
+
+    # Re-run global migrations now that moneyball tables exist.
+    # apply_all is idempotent — already-applied migrations are skipped.
+    # This matters when an old DB has no moneyballs table at startup;
+    # the migration runs at init_db time and skips moneyball-related work.
+    # Once init_moneyball_schema creates the table here, we want the
+    # migration's moneyball steps to run.
+    from . import _migrations
+    # Mark migration 001 as not-applied if moneyballs.chat_id is still missing,
+    # so apply_all will retry. This is a one-time fixup for the order issue.
+    cols = {r["name"] for r in db._conn.execute("PRAGMA table_info(moneyballs)").fetchall()}
+    if "chat_id" not in cols:
+        db._conn.execute("DELETE FROM schema_migrations WHERE name = '001_multi_chat_schema'")
+        _migrations.apply_all(db._conn)
 
 
 # ─────────────────────────────────────────────
