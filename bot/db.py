@@ -164,18 +164,25 @@ def set_game_message(game_id: int, chat_id: int, message_id: int) -> None:
     )
 
 
-def list_upcoming_games(tz: Optional["ZoneInfo"] = None) -> list[dict]:
+def list_upcoming_games(tz: Optional["ZoneInfo"] = None, chat_id: Optional[int] = None) -> list[dict]:
     """Open games scheduled for today or any future day (in `tz`).
     Sooner first.
 
     A game at 9:30 AM today still counts as "upcoming" all day, even after
     it's been played — only at midnight tomorrow does it drop off. Pass tz
     to control which day-boundary is used; defaults to UTC if omitted.
+    Pass chat_id to restrict to a specific group chat.
     """
     assert _conn is not None
-    rows = _conn.execute(
-        "SELECT * FROM games WHERE status = 'open' ORDER BY scheduled_for ASC"
-    ).fetchall()
+    if chat_id is not None:
+        rows = _conn.execute(
+            "SELECT * FROM games WHERE status = 'open' AND chat_id = ? ORDER BY scheduled_for ASC",
+            (chat_id,),
+        ).fetchall()
+    else:
+        rows = _conn.execute(
+            "SELECT * FROM games WHERE status = 'open' ORDER BY scheduled_for ASC"
+        ).fetchall()
     if tz is None:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo("UTC")
@@ -193,13 +200,19 @@ def list_upcoming_games(tz: Optional["ZoneInfo"] = None) -> list[dict]:
     return out
 
 
-def list_past_games(limit: int = 50, tz: Optional["ZoneInfo"] = None) -> list[dict]:
+def list_past_games(limit: int = 50, tz: Optional["ZoneInfo"] = None, chat_id: Optional[int] = None) -> list[dict]:
     """Games whose scheduled date is before today (in `tz`), most recent first.
-    Capped at `limit` to avoid huge replies."""
+    Capped at `limit` to avoid huge replies. Pass chat_id to restrict to one group."""
     assert _conn is not None
-    rows = _conn.execute(
-        "SELECT * FROM games WHERE status != 'cancelled' ORDER BY scheduled_for DESC"
-    ).fetchall()
+    if chat_id is not None:
+        rows = _conn.execute(
+            "SELECT * FROM games WHERE status != 'cancelled' AND chat_id = ? ORDER BY scheduled_for DESC",
+            (chat_id,),
+        ).fetchall()
+    else:
+        rows = _conn.execute(
+            "SELECT * FROM games WHERE status != 'cancelled' ORDER BY scheduled_for DESC"
+        ).fetchall()
     if tz is None:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo("UTC")
@@ -219,18 +232,30 @@ def list_past_games(limit: int = 50, tz: Optional["ZoneInfo"] = None) -> list[di
     return out
 
 
-def list_games_for_member(member_id: int, tz: Optional["ZoneInfo"] = None) -> list[dict]:
-    """Upcoming games (today or later in `tz`) that the member is in."""
+def list_games_for_member(member_id: int, tz: Optional["ZoneInfo"] = None, chat_id: Optional[int] = None) -> list[dict]:
+    """Upcoming games (today or later in `tz`) that the member is in.
+    Pass chat_id to restrict to one group chat."""
     assert _conn is not None
-    rows = _conn.execute(
-        """
-        SELECT g.* FROM games g
-        JOIN participants p ON p.game_id = g.id
-        WHERE g.status = 'open' AND p.member_id = ?
-        ORDER BY g.scheduled_for ASC
-        """,
-        (member_id,),
-    ).fetchall()
+    if chat_id is not None:
+        rows = _conn.execute(
+            """
+            SELECT g.* FROM games g
+            JOIN participants p ON p.game_id = g.id
+            WHERE g.status = 'open' AND p.member_id = ? AND g.chat_id = ?
+            ORDER BY g.scheduled_for ASC
+            """,
+            (member_id, chat_id),
+        ).fetchall()
+    else:
+        rows = _conn.execute(
+            """
+            SELECT g.* FROM games g
+            JOIN participants p ON p.game_id = g.id
+            WHERE g.status = 'open' AND p.member_id = ?
+            ORDER BY g.scheduled_for ASC
+            """,
+            (member_id,),
+        ).fetchall()
     if tz is None:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo("UTC")
@@ -248,13 +273,20 @@ def list_games_for_member(member_id: int, tz: Optional["ZoneInfo"] = None) -> li
     return out
 
 
-def list_games_in_range(start: datetime, end: datetime) -> list[dict]:
+def list_games_in_range(start: datetime, end: datetime, chat_id: Optional[int] = None) -> list[dict]:
     """All non-cancelled games where start <= scheduled_for < end.
-    Both bounds must be timezone-aware. Soonest first."""
+    Both bounds must be timezone-aware. Soonest first.
+    Pass chat_id to restrict to one group chat."""
     assert _conn is not None
-    rows = _conn.execute(
-        "SELECT * FROM games WHERE status != 'cancelled' ORDER BY scheduled_for ASC"
-    ).fetchall()
+    if chat_id is not None:
+        rows = _conn.execute(
+            "SELECT * FROM games WHERE status != 'cancelled' AND chat_id = ? ORDER BY scheduled_for ASC",
+            (chat_id,),
+        ).fetchall()
+    else:
+        rows = _conn.execute(
+            "SELECT * FROM games WHERE status != 'cancelled' ORDER BY scheduled_for ASC"
+        ).fetchall()
     out = []
     for r in rows:
         try:
@@ -268,21 +300,36 @@ def list_games_in_range(start: datetime, end: datetime) -> list[dict]:
     return out
 
 
-def list_members_not_in_game(game_id: int) -> list[dict]:
+def list_members_not_in_game(game_id: int, chat_id: Optional[int] = None) -> list[dict]:
     """All known members who aren't already on a game's roster (confirmed or waitlist).
-    Used to populate the 'Add Member' picker. Sorted by display_name."""
+    Used to populate the 'Add Member' picker. Sorted by display_name.
+    If chat_id is given, restricts to members of that chat only."""
     assert _conn is not None
-    rows = _conn.execute(
-        """
-        SELECT m.* FROM members m
-        WHERE NOT EXISTS (
-            SELECT 1 FROM participants p
-            WHERE p.game_id = ? AND p.member_id = m.telegram_id
-        )
-        ORDER BY LOWER(m.display_name) ASC
-        """,
-        (game_id,),
-    ).fetchall()
+    if chat_id is not None:
+        rows = _conn.execute(
+            """
+            SELECT m.* FROM members m
+            JOIN chat_members cm ON cm.telegram_user_id = m.telegram_id AND cm.chat_id = ?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM participants p
+                WHERE p.game_id = ? AND p.member_id = m.telegram_id
+            )
+            ORDER BY LOWER(m.display_name) ASC
+            """,
+            (chat_id, game_id),
+        ).fetchall()
+    else:
+        rows = _conn.execute(
+            """
+            SELECT m.* FROM members m
+            WHERE NOT EXISTS (
+                SELECT 1 FROM participants p
+                WHERE p.game_id = ? AND p.member_id = m.telegram_id
+            )
+            ORDER BY LOWER(m.display_name) ASC
+            """,
+            (game_id,),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 

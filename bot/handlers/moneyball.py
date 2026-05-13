@@ -79,7 +79,8 @@ async def cmd_moneyball(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     # Otherwise list eligible games
-    games = moneyball.list_eligible_games_for_moneyball(tz=tz)
+    chat_id = update.effective_chat.id
+    games = moneyball.list_eligible_games_for_moneyball(tz=tz, chat_id=chat_id)
     if not games:
         await update.effective_message.reply_html(
             "<b>Money Ball</b>\n<i>No games with 8 confirmed players right now.</i>\n\n"
@@ -396,7 +397,8 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             return
 
-    rows = moneyball.compute_leaderboard(scope)
+    chat_id = update.effective_chat.id
+    rows = moneyball.compute_leaderboard(scope, chat_id=chat_id)
     if not rows:
         await update.effective_message.reply_html(
             f"<b>🏆 Leaderboard — {label}</b>\n<i>No completed money balls yet.</i>"

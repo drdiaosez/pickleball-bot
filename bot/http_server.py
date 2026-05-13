@@ -129,8 +129,34 @@ async def auth_middleware(request: web.Request, handler):
     if db.get_member(user_id) is None:
         return web.json_response({"error": "not a member"}, status=403)
 
+    # For moneyball-specific routes, verify the user belongs to the same chat
+    # as the money ball they're accessing. This prevents cross-chat data leaks.
+    mb_id_str = request.match_info.get("mb_id")
+    if mb_id_str is not None:
+        try:
+            mb_id = int(mb_id_str)
+        except ValueError:
+            return web.json_response({"error": "bad id"}, status=400)
+        mb_chat_id = _get_moneyball_chat_id(mb_id)
+        if mb_chat_id is not None:
+            row = db._conn.execute(
+                "SELECT 1 FROM chat_members WHERE chat_id = ? AND telegram_user_id = ?",
+                (mb_chat_id, user_id),
+            ).fetchone()
+            if row is None:
+                return web.json_response({"error": "not a member of this chat"}, status=403)
+
     request["user_id"] = user_id
     return await handler(request)
+
+
+def _get_moneyball_chat_id(mb_id: int):
+    """Return the chat_id for a moneyball, or None if not found/unset."""
+    assert db._conn is not None
+    row = db._conn.execute(
+        "SELECT chat_id FROM moneyballs WHERE id = ?", (mb_id,)
+    ).fetchone()
+    return row["chat_id"] if row else None
 
 
 # ─────────────────────────────────────────────

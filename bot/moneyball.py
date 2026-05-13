@@ -362,17 +362,19 @@ def compute_standings(mb: dict) -> list[dict]:
 MEDAL_POINTS = {1: 3, 2: 2, 3: 1}  # gold, silver, bronze
 
 
-def compute_leaderboard(scope: str = "90d") -> list[dict]:
+def compute_leaderboard(scope: str = "90d", chat_id: Optional[int] = None) -> list[dict]:
     """Compute medal leaderboard. Scope is one of:
         '90d'      — last 90 days (default for /leaderboard)
         'year'     — current calendar year
         'alltime'  — all completed money balls
 
+    Pass chat_id to restrict to money balls from one group chat.
     Returns rows sorted by points desc, then gold count desc, then silver, bronze.
     Each row: {member_id, name, gold, silver, bronze, points, total_played}
     """
     assert db._conn is not None
     cutoff_clause = ""
+    chat_clause = ""
     params: list = []
     if scope == "90d":
         cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
@@ -387,10 +389,14 @@ def compute_leaderboard(scope: str = "90d") -> list[dict]:
     else:
         raise ValueError(f"unknown scope: {scope!r}")
 
+    if chat_id is not None:
+        chat_clause = "AND mb.chat_id = ?"
+        params.append(chat_id)
+
     rows = db._conn.execute(
         f"""
         SELECT mb.id FROM moneyballs mb
-        WHERE mb.status = 'completed' {cutoff_clause}
+        WHERE mb.status = 'completed' {cutoff_clause} {chat_clause}
         ORDER BY mb.completed_at ASC
         """,
         params,
@@ -447,12 +453,12 @@ def compute_leaderboard(scope: str = "90d") -> list[dict]:
 # For /moneyball command — find eligible games
 # ─────────────────────────────────────────────
 
-def list_eligible_games_for_moneyball(tz=None) -> list[dict]:
+def list_eligible_games_for_moneyball(tz=None, chat_id: Optional[int] = None) -> list[dict]:
     """Games with exactly 8 confirmed participants (members + guests).
     Used by /moneyball to show selectable games.
-    """
+    Pass chat_id to restrict to one group chat."""
     assert db._conn is not None
-    upcoming = db.list_upcoming_games(tz=tz)
+    upcoming = db.list_upcoming_games(tz=tz, chat_id=chat_id)
     eligible = []
     for g in upcoming:
         confirmed = db.confirmed_count(g["id"])

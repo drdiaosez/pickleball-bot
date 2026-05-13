@@ -167,7 +167,63 @@ def _001_multi_chat_schema(conn: sqlite3.Connection) -> None:
     # Actually this lives on chat_members.telegram_role_checked_at — already added above.
 
 
-# Append future migrations here as ("002_name", _002_func), etc.
+# ─────────────────────── 002: games.chat_id NOT NULL ───────────────────────
+
+def _002_games_chat_id_not_null(conn: sqlite3.Connection) -> None:
+    """Enforce chat_id on games. By this point (after PR 1) every row should
+    already have chat_id populated. We recreate the table with NOT NULL.
+
+    If any NULL rows remain (e.g. the DM-created game with id=9), they would
+    block this migration. We log a warning and skip them rather than failing.
+    """
+    null_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM games WHERE chat_id IS NULL"
+    ).fetchone()["n"]
+    if null_count > 0:
+        log.warning(
+            "Migration 002: %d game(s) still have NULL chat_id — "
+            "they will not be visible in any chat after this migration. "
+            "Run: UPDATE games SET chat_id = <your_group_id> WHERE chat_id IS NULL",
+            null_count,
+        )
+
+    conn.executescript(
+        """
+        BEGIN;
+
+        CREATE TABLE games_new (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            scheduled_for  TEXT NOT NULL,
+            location       TEXT NOT NULL,
+            organizer_id   INTEGER NOT NULL REFERENCES members(telegram_id),
+            max_players    INTEGER NOT NULL DEFAULT 4,
+            status         TEXT NOT NULL DEFAULT 'open',
+            notes          TEXT,
+            chat_id        INTEGER NOT NULL,
+            message_id     INTEGER,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        INSERT INTO games_new
+            SELECT id, scheduled_for, location, organizer_id, max_players,
+                   status, notes, chat_id, message_id, created_at
+            FROM games
+            WHERE chat_id IS NOT NULL;
+
+        DROP TABLE games;
+        ALTER TABLE games_new RENAME TO games;
+
+        CREATE INDEX IF NOT EXISTS idx_games_scheduled ON games(scheduled_for);
+        CREATE INDEX IF NOT EXISTS idx_games_status ON games(status);
+        CREATE INDEX IF NOT EXISTS idx_games_chat ON games(chat_id);
+
+        COMMIT;
+        """
+    )
+
+
+# Append future migrations here as ("003_name", _003_func), etc.
 MIGRATIONS: list[tuple[str, Callable[[sqlite3.Connection], None]]] = [
     ("001_multi_chat_schema", _001_multi_chat_schema),
+    ("002_games_chat_id_not_null", _002_games_chat_id_not_null),
 ]

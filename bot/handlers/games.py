@@ -23,7 +23,8 @@ async def cmd_games(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await touch_member(update)
     tz = context.bot_data["tz"]
-    games = db.list_upcoming_games(tz=tz)
+    chat_id = update.effective_chat.id
+    games = db.list_upcoming_games(tz=tz, chat_id=chat_id)
     text = views.render_game_list_header(len(games), "Upcoming games")
     if not games:
         await update.effective_message.reply_html(text)
@@ -38,8 +39,9 @@ async def cmd_mygames(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     await touch_member(update)
     tz = context.bot_data["tz"]
+    chat_id = update.effective_chat.id
     user = update.effective_user
-    games = db.list_games_for_member(user.id, tz=tz)
+    games = db.list_games_for_member(user.id, tz=tz, chat_id=chat_id)
     text = views.render_game_list_header(len(games), "Your upcoming games")
     if not games:
         await update.effective_message.reply_html(text)
@@ -54,7 +56,8 @@ async def cmd_past(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await touch_member(update)
     tz = context.bot_data["tz"]
-    games = db.list_past_games(limit=50, tz=tz)
+    chat_id = update.effective_chat.id
+    games = db.list_past_games(limit=50, tz=tz, chat_id=chat_id)
     text = views.render_game_list_header(len(games), "Past games")
     if not games:
         await update.effective_message.reply_html(
@@ -94,7 +97,8 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     sunday_end = monday + timedelta(days=7)  # exclusive upper bound
-    games = db.list_games_in_range(monday, sunday_end)
+    chat_id = update.effective_chat.id
+    games = db.list_games_in_range(monday, sunday_end, chat_id=chat_id)
     label = (
         f"Week of {monday.strftime('%a %-m/%-d')} – "
         f"{(monday + timedelta(days=6)).strftime('%a %-m/%-d')}"

@@ -756,7 +756,11 @@ async def _show_member_picker(
     context: ContextTypes.DEFAULT_TYPE, update: Update, game_id: int
 ) -> None:
     """Replace the game card with a picker showing members not yet on the roster."""
-    members = db.list_members_not_in_game(game_id)
+    game = db.get_game(game_id)
+    if not game:
+        return
+    chat_id = game.get("chat_id")
+    members = db.list_members_not_in_game(game_id, chat_id=chat_id)
     if not members:
         await update.callback_query.answer(
             "All known members are already on this game's roster.",
@@ -765,9 +769,6 @@ async def _show_member_picker(
         return
 
     # Build a lightweight preface so it's clear what's happening
-    game = db.get_game(game_id)
-    if not game:
-        return
     tz = context.bot_data["tz"]
     when = views.format_when(game["scheduled_for"], tz)
     text = (
