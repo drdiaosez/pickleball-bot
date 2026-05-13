@@ -431,12 +431,12 @@ def compute_leaderboard(scope: str = "90d") -> list[dict]:
 # For /moneyball command — find eligible games
 # ─────────────────────────────────────────────
 
-def list_eligible_games_for_moneyball() -> list[dict]:
+def list_eligible_games_for_moneyball(tz=None) -> list[dict]:
     """Games with exactly 8 confirmed participants (members + guests).
     Used by /moneyball to show selectable games.
     """
     assert db._conn is not None
-    upcoming = db.list_upcoming_games()
+    upcoming = db.list_upcoming_games(tz=tz)
     eligible = []
     for g in upcoming:
         confirmed = db.confirmed_count(g["id"])

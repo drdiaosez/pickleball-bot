@@ -23,7 +23,7 @@ async def cmd_games(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await touch_member(update)
     tz = context.bot_data["tz"]
-    games = db.list_upcoming_games()
+    games = db.list_upcoming_games(tz=tz)
     text = views.render_game_list_header(len(games), "Upcoming games")
     if not games:
         await update.effective_message.reply_html(text)
@@ -39,7 +39,7 @@ async def cmd_mygames(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await touch_member(update)
     tz = context.bot_data["tz"]
     user = update.effective_user
-    games = db.list_games_for_member(user.id)
+    games = db.list_games_for_member(user.id, tz=tz)
     text = views.render_game_list_header(len(games), "Your upcoming games")
     if not games:
         await update.effective_message.reply_html(text)
@@ -54,7 +54,7 @@ async def cmd_past(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await touch_member(update)
     tz = context.bot_data["tz"]
-    games = db.list_past_games(limit=50)
+    games = db.list_past_games(limit=50, tz=tz)
     text = views.render_game_list_header(len(games), "Past games")
     if not games:
         await update.effective_message.reply_html(

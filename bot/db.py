@@ -158,19 +158,22 @@ def set_game_message(game_id: int, chat_id: int, message_id: int) -> None:
     )
 
 
-def list_upcoming_games() -> list[dict]:
-    """Open games whose scheduled time is in the future (or in the last 30 min,
-    so a game that just started doesn't disappear mid-play). Soonest first.
+def list_upcoming_games(tz: Optional["ZoneInfo"] = None) -> list[dict]:
+    """Open games scheduled for today or any future day (in `tz`).
+    Sooner first.
 
-    We pull all open games and filter in Python because the stored ISO strings
-    have timezone offsets and SQLite's datetime() returns UTC — comparing them
-    via SQL string comparison is fragile.
+    A game at 9:30 AM today still counts as "upcoming" all day, even after
+    it's been played — only at midnight tomorrow does it drop off. Pass tz
+    to control which day-boundary is used; defaults to UTC if omitted.
     """
     assert _conn is not None
     rows = _conn.execute(
         "SELECT * FROM games WHERE status = 'open' ORDER BY scheduled_for ASC"
     ).fetchall()
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    if tz is None:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("UTC")
+    today_start = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
     out = []
     for r in rows:
         try:
@@ -179,19 +182,22 @@ def list_upcoming_games() -> list[dict]:
                 dt = dt.replace(tzinfo=timezone.utc)
         except ValueError:
             continue
-        if dt >= cutoff:
+        if dt >= today_start:
             out.append(dict(r))
     return out
 
 
-def list_past_games(limit: int = 50) -> list[dict]:
-    """Games whose scheduled time has already passed (open or completed).
-    Most recent first. Capped to avoid huge replies."""
+def list_past_games(limit: int = 50, tz: Optional["ZoneInfo"] = None) -> list[dict]:
+    """Games whose scheduled date is before today (in `tz`), most recent first.
+    Capped at `limit` to avoid huge replies."""
     assert _conn is not None
     rows = _conn.execute(
         "SELECT * FROM games WHERE status != 'cancelled' ORDER BY scheduled_for DESC"
     ).fetchall()
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    if tz is None:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("UTC")
+    today_start = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
     out = []
     for r in rows:
         try:
@@ -200,10 +206,39 @@ def list_past_games(limit: int = 50) -> list[dict]:
                 dt = dt.replace(tzinfo=timezone.utc)
         except ValueError:
             continue
-        if dt < cutoff:
+        if dt < today_start:
             out.append(dict(r))
             if len(out) >= limit:
                 break
+    return out
+
+
+def list_games_for_member(member_id: int, tz: Optional["ZoneInfo"] = None) -> list[dict]:
+    """Upcoming games (today or later in `tz`) that the member is in."""
+    assert _conn is not None
+    rows = _conn.execute(
+        """
+        SELECT g.* FROM games g
+        JOIN participants p ON p.game_id = g.id
+        WHERE g.status = 'open' AND p.member_id = ?
+        ORDER BY g.scheduled_for ASC
+        """,
+        (member_id,),
+    ).fetchall()
+    if tz is None:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("UTC")
+    today_start = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    out = []
+    for r in rows:
+        try:
+            dt = datetime.fromisoformat(r["scheduled_for"])
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if dt >= today_start:
+            out.append(dict(r))
     return out
 
 
@@ -223,32 +258,6 @@ def list_games_in_range(start: datetime, end: datetime) -> list[dict]:
         except ValueError:
             continue
         if start <= dt < end:
-            out.append(dict(r))
-    return out
-
-
-def list_games_for_member(member_id: int) -> list[dict]:
-    """Upcoming games (future + ~30 min grace) that the member is in."""
-    assert _conn is not None
-    rows = _conn.execute(
-        """
-        SELECT g.* FROM games g
-        JOIN participants p ON p.game_id = g.id
-        WHERE g.status = 'open' AND p.member_id = ?
-        ORDER BY g.scheduled_for ASC
-        """,
-        (member_id,),
-    ).fetchall()
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
-    out = []
-    for r in rows:
-        try:
-            dt = datetime.fromisoformat(r["scheduled_for"])
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-        if dt >= cutoff:
             out.append(dict(r))
     return out
 
