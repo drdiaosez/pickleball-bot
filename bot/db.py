@@ -262,6 +262,24 @@ def list_games_in_range(start: datetime, end: datetime) -> list[dict]:
     return out
 
 
+def list_members_not_in_game(game_id: int) -> list[dict]:
+    """All known members who aren't already on a game's roster (confirmed or waitlist).
+    Used to populate the 'Add Member' picker. Sorted by display_name."""
+    assert _conn is not None
+    rows = _conn.execute(
+        """
+        SELECT m.* FROM members m
+        WHERE NOT EXISTS (
+            SELECT 1 FROM participants p
+            WHERE p.game_id = ? AND p.member_id = m.telegram_id
+        )
+        ORDER BY LOWER(m.display_name) ASC
+        """,
+        (game_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def cancel_game(game_id: int) -> None:
     assert _conn is not None
     _conn.execute("UPDATE games SET status = 'cancelled' WHERE id = ?", (game_id,))

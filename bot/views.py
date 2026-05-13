@@ -79,12 +79,10 @@ def game_card_keyboard(game_id: int, viewer_in_game: Optional[str], game_full: b
         if game_full:
             rows.append([
                 InlineKeyboardButton("⏳ Join Waitlist", callback_data=f"join:{game_id}"),
-                InlineKeyboardButton("+ Add Guest", callback_data=f"guest:{game_id}"),
             ])
         else:
             rows.append([
                 InlineKeyboardButton("✓ Join", callback_data=f"join:{game_id}"),
-                InlineKeyboardButton("+ Add Guest", callback_data=f"guest:{game_id}"),
             ])
     else:
         rows.append([
@@ -92,13 +90,29 @@ def game_card_keyboard(game_id: int, viewer_in_game: Optional[str], game_full: b
                 f"✗ Leave ({viewer_in_game})",
                 callback_data=f"leave:{game_id}",
             ),
-            InlineKeyboardButton("+ Add Guest", callback_data=f"guest:{game_id}"),
         ])
 
+    rows.append([
+        InlineKeyboardButton("+ Add Member", callback_data=f"addmem:{game_id}"),
+        InlineKeyboardButton("+ Add Guest", callback_data=f"guest:{game_id}"),
+    ])
     rows.append([
         InlineKeyboardButton("⚙ Manage", callback_data=f"manage:{game_id}"),
         InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh:{game_id}"),
     ])
+    return InlineKeyboardMarkup(rows)
+
+
+def member_picker_keyboard(game_id: int, members: list[dict]) -> InlineKeyboardMarkup:
+    """Buttons for picking a chat member to add to a game.
+    Each member becomes a tappable row. Last row is a cancel."""
+    rows = []
+    for m in members:
+        name = m["display_name"][:32]
+        rows.append([
+            InlineKeyboardButton(name, callback_data=f"addmem_do:{game_id}:{m['telegram_id']}")
+        ])
+    rows.append([InlineKeyboardButton("Cancel", callback_data=f"refresh:{game_id}")])
     return InlineKeyboardMarkup(rows)
 
 

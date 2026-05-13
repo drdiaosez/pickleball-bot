@@ -163,6 +163,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         elif action == "guest":
             await _prompt_guest(context, update, int(args[0]), user.id)
 
+        elif action == "addmem":
+            await _show_member_picker(context, update, int(args[0]))
+
+        elif action == "addmem_do":
+            await _do_add_member(context, update, int(args[0]), int(args[1]), user.id)
+
         elif action == "manage":
             await render_manage_in_place(context, update, int(args[0]))
 
@@ -742,6 +748,96 @@ def _name(p: dict) -> str:
     if p.get("member_id"):
         return p.get("member_name") or "?"
     return f"{p.get('guest_name')} (guest)"
+
+
+# ─────────────────────── add-member picker ─────────────────────── #
+
+async def _show_member_picker(
+    context: ContextTypes.DEFAULT_TYPE, update: Update, game_id: int
+) -> None:
+    """Replace the game card with a picker showing members not yet on the roster."""
+    members = db.list_members_not_in_game(game_id)
+    if not members:
+        await update.callback_query.answer(
+            "All known members are already on this game's roster.",
+            show_alert=True,
+        )
+        return
+
+    # Build a lightweight preface so it's clear what's happening
+    game = db.get_game(game_id)
+    if not game:
+        return
+    tz = context.bot_data["tz"]
+    when = views.format_when(game["scheduled_for"], tz)
+    text = (
+        f"<b>Add member to:</b>\n"
+        f"<i>{when} @ {game['location']}</i>\n\n"
+        f"Tap a name to add them:"
+    )
+    kb = views.member_picker_keyboard(game_id, members)
+    try:
+        await update.callback_query.edit_message_text(
+            text=text, parse_mode=ParseMode.HTML, reply_markup=kb
+        )
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
+
+
+async def _do_add_member(
+    context: ContextTypes.DEFAULT_TYPE,
+    update: Update,
+    game_id: int,
+    target_member_id: int,
+    actor_user_id: int,
+) -> None:
+    """Add target member to the game, then re-render the game card."""
+    # Validate target is known
+    target = db.get_member(target_member_id)
+    if not target:
+        await update.callback_query.answer("That member is gone.", show_alert=True)
+        return
+
+    try:
+        result = db.add_participant(
+            game_id, added_by=actor_user_id, member_id=target_member_id
+        )
+    except ValueError as e:
+        msg = str(e)
+        if msg.startswith("already_"):
+            await update.callback_query.answer(
+                f"{target['display_name']} is already on this game.",
+                show_alert=True,
+            )
+        else:
+            await update.callback_query.answer("Couldn't add.", show_alert=True)
+        # Fall back to re-rendering the card so the user isn't stuck on the picker
+        await render_card_in_place(context, update, game_id, actor_user_id)
+        return
+
+    where = "confirmed" if result["status"] == "confirmed" else f"waitlist #{result['position']}"
+    await update.callback_query.answer(f"Added {target['display_name']} ({where}).")
+    await render_card_in_place(context, update, game_id, actor_user_id)
+
+    # DM the added member if they ended up confirmed (don't spam for waitlist)
+    if result["status"] == "confirmed":
+        try:
+            tz = context.bot_data["tz"]
+            game = db.get_game(game_id)
+            when = views.format_when(game["scheduled_for"], tz)
+            await context.bot.send_message(
+                chat_id=target_member_id,
+                text=(
+                    f"➕ <b>{update.effective_user.first_name or 'A member'}</b> added you "
+                    f"to a game.\n\n"
+                    f"<b>{when}</b> @ {game['location']}\n\n"
+                    f"<i>Tap Leave on the game card in the group if you can't make it.</i>"
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as e:
+            log.info("Couldn't DM added member %s: %s", target_member_id, e)
 
 
 # ─────────────────────── DM notifications ─────────────────────── #
