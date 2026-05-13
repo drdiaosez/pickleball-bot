@@ -73,14 +73,16 @@ async def amain() -> None:
     app.add_handler(roster.build_cancel_guest_handler())
     app.add_handler(roster.build_cancel_edit_handler())
 
-    # Roster callbacks + text dispatcher
-    for h in roster.build_roster_handlers():
+    # Chat-picker callback must be registered BEFORE roster's catch-all
+    # CallbackQueryHandler — roster has no pattern filter so it would swallow
+    # pick_chat:* callbacks otherwise. register_command() calls at module
+    # import time have already populated COMMAND_REGISTRY by this point.
+    for h in chat_picker.build_picker_handlers():
         app.add_handler(h)
 
-    # Chat-picker callback (DM "which chat?" picker). Registered after the
-    # specific command handlers so register_command() calls have populated
-    # COMMAND_REGISTRY before this point.
-    for h in chat_picker.build_picker_handlers():
+    # Roster callbacks (catch-all) + text dispatcher — must come AFTER the
+    # picker handler above.
+    for h in roster.build_roster_handlers():
         app.add_handler(h)
 
     # my_chat_member / chat_member events — register AFTER command handlers,
