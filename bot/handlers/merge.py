@@ -6,15 +6,17 @@ Usage:
   /merge Pat 123456789       (telegram user ID also accepted)
 
 Flow:
-  1. Operator runs the command in the group
-  2. Bot replies with a preview: "Would merge 3 money ball appearances and
-     2 game signups from 'Guest Pat' into Pat Johnson (@patjohnson). Confirm?"
-  3. Operator taps Confirm → merge runs → bot reports the result
+  1. Operator (a Telegram admin of the group) runs the command
+  2. Bot replies with a preview
+  3. Operator taps Confirm → merge runs
+
+Admin status is determined per-chat: a user is an admin for the merge if
+Telegram lists them as creator/administrator in the chat the merge targets.
+This is fetched and cached via chat_members.role (see bot/chats.py).
 """
 from __future__ import annotations
 
 import logging
-import os
 import re
 import shlex
 
@@ -23,32 +25,37 @@ from telegram.constants import ParseMode
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 from telegram.helpers import escape
 
-from .. import db
+from .. import chats as chats_mod, db
+from ..chat_picker import resolve_chat, register_command
 from .common import gate, touch_member
 
 log = logging.getLogger(__name__)
 
 
-def _admin_user_ids() -> set[int]:
-    """Comma-separated list of Telegram user IDs in ADMIN_USER_IDS env."""
-    raw = os.environ.get("ADMIN_USER_IDS", "").strip()
-    if not raw:
-        return set()
-    out = set()
-    for tok in raw.split(","):
-        tok = tok.strip()
-        if tok.isdigit():
-            out.add(int(tok))
-    return out
+async def _ensure_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> bool:
+    """Return True iff the current user is a Telegram admin of `chat_id`.
 
-
-def _is_admin(user_id: int) -> bool:
-    admins = _admin_user_ids()
-    if not admins:
-        # If ADMIN_USER_IDS is unset, fall back to "nobody is admin"
-        # so /merge can't be run accidentally
+    Forces a fresh sync first (rather than trusting cached role) so a brand-new
+    chat owner doesn't get told "you're not admin" before the 5-min cache
+    populates. Replies with a denial message if not admin.
+    """
+    user = update.effective_user
+    if not user:
         return False
-    return user_id in admins
+    try:
+        role = await chats_mod.sync_user_in_chat(update.get_bot(), chat_id, user.id)
+    except Exception:
+        log.exception("admin sync failed for chat=%s user=%s", chat_id, user.id)
+        role = "member"
+
+    if role == "admin":
+        return True
+
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            "Only group admins can run /merge."
+        )
+    return False
 
 
 # ─────────────────────────── /merge command ───────────────────────────
@@ -57,18 +64,15 @@ async def cmd_merge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await gate(update):
         return
     await touch_member(update)
-    user = update.effective_user
-
-    if not _is_admin(user.id):
-        await update.effective_message.reply_text(
-            "Only admins can run /merge. Set ADMIN_USER_IDS in .env."
-        )
+    chat_id = await resolve_chat(update, context, "merge")
+    if chat_id is None:
+        return
+    if not await _ensure_admin(update, context, chat_id):
         return
 
     # Parse args. We use shlex so users can quote multi-word guest names:
     #   /merge "Guest Pat" @pat
     raw = update.effective_message.text or ""
-    # Strip the leading /merge or /merge@botname
     raw = re.sub(r"^/merge(@\S+)?\s*", "", raw, count=1).strip()
 
     if not raw:
@@ -89,7 +93,6 @@ async def cmd_merge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    # If more than 2 tokens, treat all but the last as the guest name
     member_token = tokens[-1]
     guest_name = " ".join(tokens[:-1])
 
@@ -133,11 +136,13 @@ async def cmd_merge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"those entries will be skipped (you can't be in the same roster twice).</i>"
     )
 
-    # Stash the merge intent so the callback can act on it
+    # Stash the merge intent so the callback can act on it.
+    # Include chat_id so the confirm step can re-verify admin status.
     context.user_data["pending_merge"] = {
         "guest_name": guest_name,
         "member_id": member["telegram_id"],
         "member_name": member["display_name"],
+        "chat_id": chat_id,
     }
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✓ Confirm merge", callback_data="merge_yes"),
@@ -151,11 +156,6 @@ async def on_merge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     q = update.callback_query
     await q.answer()
-    user = update.effective_user
-
-    if not _is_admin(user.id):
-        await q.edit_message_text("Only admins can confirm a merge.")
-        return
 
     pending = context.user_data.get("pending_merge")
     if not pending:
@@ -163,6 +163,12 @@ async def on_merge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "Nothing to merge — start over with <code>/merge</code>.",
             parse_mode=ParseMode.HTML,
         )
+        return
+
+    # Re-verify admin against the chat that initiated the merge — not the chat
+    # the callback is firing in (callback chat is the same as initiate chat by
+    # construction, but defense in depth).
+    if not await _ensure_admin(update, context, pending["chat_id"]):
         return
 
     if q.data == "merge_no":
@@ -207,3 +213,6 @@ def build_merge_handlers() -> list:
         CommandHandler("merge", cmd_merge),
         CallbackQueryHandler(on_merge_callback, pattern=r"^merge_(yes|no)$"),
     ]
+
+
+register_command("merge", cmd_merge)

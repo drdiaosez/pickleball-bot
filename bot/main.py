@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from telegram.ext import Application, CommandHandler
 
-from . import db, moneyball, http_server
+from . import db, moneyball, http_server, chat_picker
 from .handlers import common, games, moneyball as mb_handlers, merge, newgame, roster, chat_events
 
 
@@ -75,6 +75,12 @@ async def amain() -> None:
 
     # Roster callbacks + text dispatcher
     for h in roster.build_roster_handlers():
+        app.add_handler(h)
+
+    # Chat-picker callback (DM "which chat?" picker). Registered after the
+    # specific command handlers so register_command() calls have populated
+    # COMMAND_REGISTRY before this point.
+    for h in chat_picker.build_picker_handlers():
         app.add_handler(h)
 
     # my_chat_member / chat_member events — register AFTER command handlers,

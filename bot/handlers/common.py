@@ -26,9 +26,12 @@ HELP_TEXT = (
     "/moneyball — start an 8-player money ball tournament\n"
     "/leaderboard — medals from recent money balls\n"
     "   <i>/leaderboard year, /leaderboard alltime</i>\n"
+    "/merge — (admin) merge a guest's history into a member\n"
     "/help — this message\n\n"
     "Everything else (joining, leaving, adding guests, swaps) happens "
-    "through the buttons on each game card."
+    "through the buttons on each game card.\n\n"
+    "<i>Works in the group or in DM. If you DM and belong to multiple groups, "
+    "the bot will ask which one you mean.</i>"
 )
 
 

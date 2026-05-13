@@ -26,6 +26,7 @@ from telegram.ext import (
 )
 
 from .. import db, views
+from ..chat_picker import resolve_chat
 from .common import touch_member
 
 # Conversation states
@@ -170,9 +171,14 @@ async def start_newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if not await gate(update):
         return ConversationHandler.END
     await touch_member(update)
+    # Determine which chat this game belongs to. In a group, that's the
+    # current chat. In a DM, this may pop a picker — if so, bail out of the
+    # conversation; the user runs /newgame again after picking.
+    chat_id = await resolve_chat(update, context, "newgame")
+    if chat_id is None:
+        return ConversationHandler.END
     context.user_data["newgame"] = {}
-    # Remember the chat where /newgame was invoked, so we post the card there
-    context.user_data["newgame_chat_id"] = update.effective_chat.id
+    context.user_data["newgame_chat_id"] = chat_id
     await update.effective_message.reply_html(
         "📅 <b>When is the game?</b>\n\n"
         "Examples:\n"

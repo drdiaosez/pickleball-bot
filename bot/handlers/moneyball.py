@@ -20,6 +20,7 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 from telegram.helpers import escape
 
 from .. import db, moneyball, views
+from ..chat_picker import resolve_chat, register_command
 from .common import gate, touch_member
 
 log = logging.getLogger(__name__)
@@ -79,7 +80,9 @@ async def cmd_moneyball(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     # Otherwise list eligible games
-    chat_id = update.effective_chat.id
+    chat_id = await resolve_chat(update, context, "moneyball")
+    if chat_id is None:
+        return
     games = moneyball.list_eligible_games_for_moneyball(tz=tz, chat_id=chat_id)
     if not games:
         await update.effective_message.reply_html(
@@ -397,7 +400,9 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             return
 
-    chat_id = update.effective_chat.id
+    chat_id = await resolve_chat(update, context, "leaderboard")
+    if chat_id is None:
+        return
     rows = moneyball.compute_leaderboard(scope, chat_id=chat_id)
     if not rows:
         await update.effective_message.reply_html(
@@ -441,3 +446,7 @@ def build_moneyball_handlers() -> list:
         CallbackQueryHandler(on_mb_cancel, pattern=r"^mb_cancel:\d+$"),
         CallbackQueryHandler(on_mb_cancel_confirm, pattern=r"^mb_cancel_(yes|no):\d+$"),
     ]
+
+
+register_command("moneyball", cmd_moneyball)
+register_command("leaderboard", cmd_leaderboard)

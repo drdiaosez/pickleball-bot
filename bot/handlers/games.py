@@ -14,6 +14,7 @@ from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
 from .. import db, views
+from ..chat_picker import resolve_chat, register_command
 from .common import touch_member
 
 
@@ -22,8 +23,10 @@ async def cmd_games(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await gate(update):
         return
     await touch_member(update)
+    chat_id = await resolve_chat(update, context, "games")
+    if chat_id is None:
+        return
     tz = context.bot_data["tz"]
-    chat_id = update.effective_chat.id
     games = db.list_upcoming_games(tz=tz, chat_id=chat_id)
     text = views.render_game_list_header(len(games), "Upcoming games")
     if not games:
@@ -38,8 +41,10 @@ async def cmd_mygames(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not await gate(update):
         return
     await touch_member(update)
+    chat_id = await resolve_chat(update, context, "mygames")
+    if chat_id is None:
+        return
     tz = context.bot_data["tz"]
-    chat_id = update.effective_chat.id
     user = update.effective_user
     games = db.list_games_for_member(user.id, tz=tz, chat_id=chat_id)
     text = views.render_game_list_header(len(games), "Your upcoming games")
@@ -55,8 +60,10 @@ async def cmd_past(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await gate(update):
         return
     await touch_member(update)
+    chat_id = await resolve_chat(update, context, "past")
+    if chat_id is None:
+        return
     tz = context.bot_data["tz"]
-    chat_id = update.effective_chat.id
     games = db.list_past_games(limit=50, tz=tz, chat_id=chat_id)
     text = views.render_game_list_header(len(games), "Past games")
     if not games:
@@ -82,6 +89,9 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await gate(update):
         return
     await touch_member(update)
+    chat_id = await resolve_chat(update, context, "week")
+    if chat_id is None:
+        return
     tz: ZoneInfo = context.bot_data["tz"]
     args_text = " ".join(context.args or []).strip().lower()
 
@@ -97,7 +107,6 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     sunday_end = monday + timedelta(days=7)  # exclusive upper bound
-    chat_id = update.effective_chat.id
     games = db.list_games_in_range(monday, sunday_end, chat_id=chat_id)
     label = (
         f"Week of {monday.strftime('%a %-m/%-d')} – "
@@ -160,3 +169,10 @@ def build_games_handlers() -> list:
         CommandHandler("past", cmd_past),
         CommandHandler("week", cmd_week),
     ]
+
+
+# Register for the DM picker so it can re-dispatch these after a chat is chosen.
+register_command("games", cmd_games)
+register_command("mygames", cmd_mygames)
+register_command("past", cmd_past)
+register_command("week", cmd_week)

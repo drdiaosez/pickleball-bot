@@ -150,9 +150,13 @@ def create_moneyball(game_id: int, created_by: int, entries: list[dict]) -> int:
         raise ValueError("duplicate guest names in roster")
 
     with db.transaction():
+        # Derive chat_id from the parent game so the money ball stays scoped
+        # to the correct chat for leaderboards and Mini App auth.
+        game = db.get_game(game_id)
+        game_chat_id = game.get("chat_id") if game else None
         cur = db._conn.execute(
-            "INSERT INTO moneyballs (game_id, created_by) VALUES (?, ?)",
-            (game_id, created_by),
+            "INSERT INTO moneyballs (game_id, created_by, chat_id) VALUES (?, ?, ?)",
+            (game_id, created_by, game_chat_id),
         )
         mb_id = cur.lastrowid
         for seat, e in enumerate(entries):
