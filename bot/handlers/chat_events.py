@@ -1,6 +1,6 @@
 """Handle Telegram chat lifecycle events for the bot.
 
-Two relevant Telegram update types:
+Three relevant Telegram update types:
 
   my_chat_member — the bot's own membership in a chat changed (added, removed,
     promoted, demoted). This is how we know to register a new chat or pause an
@@ -11,13 +11,17 @@ Two relevant Telegram update types:
     so admins-only commands don't accidentally include or exclude the wrong
     people. To receive chat_member updates the bot must be an admin AND the
     update type must be enabled in allowed_updates — see main.py.
+
+  message with migrate_from_chat_id — the chat was converted from a regular
+    group to a supergroup. Telegram assigns the supergroup a new chat_id, so
+    we re-key all data from the old id to the new one. See on_chat_migrate.
 """
 from __future__ import annotations
 
 import logging
 
 from telegram import Update
-from telegram.ext import ChatMemberHandler, ContextTypes
+from telegram.ext import ChatMemberHandler, ContextTypes, MessageHandler, filters
 
 from .. import chats as chats_mod, db
 
@@ -99,8 +103,71 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # interacts (via gate() → sync_user_in_chat). No need to act here.
 
 
+async def on_chat_migrate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Telegram converted a regular group to a supergroup.
+
+    Triggered by a message with migrate_from_chat_id set (delivered into the
+    NEW supergroup, where update.effective_chat.id is the new id). The
+    counterpart message in the old group has migrate_to_chat_id set, but we
+    don't need to handle that one — re-keying everything in a single pass
+    from the new side is sufficient and avoids dueling handlers.
+
+    All state (chats, chat_members, games, moneyballs) gets re-pointed to the
+    new chat id atomically. If on_my_chat_member already created a stub row
+    for the new id, the migration helper merges it.
+    """
+    msg = update.message or update.edited_message
+    if msg is None:
+        return
+    old_chat_id = getattr(msg, "migrate_from_chat_id", None)
+    if not old_chat_id:
+        # This handler is also reached for "this chat was just migrated TO a
+        # supergroup, here's the new id" — that side carries migrate_to_chat_id.
+        # We rely on the migrate_from side to do the work, so ignore the other.
+        return
+
+    new_chat_id = update.effective_chat.id if update.effective_chat else None
+    if not new_chat_id:
+        log.warning("Migration event with no effective_chat — skipping")
+        return
+
+    log.info(
+        "Chat migration detected: old=%s new=%s — re-keying data",
+        old_chat_id, new_chat_id,
+    )
+
+    try:
+        summary = db.migrate_chat_id(old_chat_id, new_chat_id)
+    except Exception:
+        log.exception(
+            "Chat migration FAILED: old=%s new=%s. Data is in inconsistent state; "
+            "manual intervention required.", old_chat_id, new_chat_id,
+        )
+        return
+
+    log.info("Chat migration complete: %s", summary)
+
+    # Best-effort confirmation in the chat. Skipped silently if it fails —
+    # the migration itself already succeeded.
+    try:
+        await context.bot.send_message(
+            chat_id=new_chat_id,
+            text=(
+                "♻️ Telegram converted this group to a supergroup, which "
+                "gives it a new chat ID. I've moved all the bot's data over "
+                "automatically — games, signups, leaderboard, everything. "
+                "Carry on!"
+            ),
+        )
+    except Exception as e:
+        log.info("Couldn't send migration confirmation message: %s", e)
+
+
 def build_chat_event_handlers() -> list:
     return [
         ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER),
         ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER),
+        # Catch the service message that fires when a group becomes a
+        # supergroup. Must be registered before any catch-all message handler.
+        MessageHandler(filters.StatusUpdate.MIGRATE, on_chat_migrate),
     ]

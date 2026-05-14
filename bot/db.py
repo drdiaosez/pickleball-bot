@@ -165,6 +165,104 @@ def update_chat_status(telegram_chat_id: int, status: str) -> None:
     )
 
 
+def migrate_chat_id(old_chat_id: int, new_chat_id: int) -> dict:
+    """Re-key every reference from old_chat_id to new_chat_id.
+
+    Called when Telegram converts a regular group to a supergroup. Telegram
+    assigns the supergroup a brand new chat_id, so all rows that reference the
+    old id (chats, chat_members, games, moneyballs) need to be re-pointed.
+
+    Handles the common case where the bot's `on_my_chat_member` handler has
+    already inserted a stub row for the new supergroup: we merge by preferring
+    the old chat's data (it has the real history, the stub only knows about
+    users who have messaged since the migration).
+
+    Idempotent: calling it twice with the same args is a no-op on the second
+    call (because old rows no longer exist).
+
+    Returns a summary dict of rows touched, for logging.
+    """
+    assert _conn is not None
+
+    if old_chat_id == new_chat_id:
+        return {"no_op": "old and new ids are identical"}
+
+    old_row = get_chat(old_chat_id)
+    if old_row is None:
+        # Nothing to migrate. Could happen if we get a duplicate MIGRATE event
+        # after the first one already succeeded.
+        return {"no_op": f"no rows for old chat_id {old_chat_id}"}
+
+    summary: dict = {"old_chat_id": old_chat_id, "new_chat_id": new_chat_id}
+
+    # Use a transaction with deferred FK checks. The FK on
+    # chat_members.chat_id -> chats(telegram_chat_id) would otherwise fire
+    # mid-statement when we change chats.telegram_chat_id while chat_members
+    # rows still point at the old value.
+    with transaction() as conn:
+        conn.execute("PRAGMA defer_foreign_keys = ON")
+
+        # If a stub row for the new id already exists (created by
+        # on_my_chat_member when the supergroup first appeared), pull off any
+        # chat_members rows it has so they don't conflict with the old rows
+        # we're about to re-key. We'll re-add the unique ones afterwards.
+        stub_member_ids: list[int] = []
+        if get_chat(new_chat_id) is not None:
+            stub_member_ids = [
+                r["telegram_user_id"]
+                for r in conn.execute(
+                    "SELECT telegram_user_id FROM chat_members WHERE chat_id = ?",
+                    (new_chat_id,),
+                )
+            ]
+            conn.execute("DELETE FROM chat_members WHERE chat_id = ?", (new_chat_id,))
+            conn.execute("DELETE FROM chats WHERE telegram_chat_id = ?", (new_chat_id,))
+            summary["stub_removed"] = True
+            summary["stub_member_ids"] = stub_member_ids
+
+        # Re-key the parent row first; FK checks are deferred so the children
+        # can be re-pointed in subsequent statements within this txn.
+        conn.execute(
+            "UPDATE chats SET telegram_chat_id = ? WHERE telegram_chat_id = ?",
+            (new_chat_id, old_chat_id),
+        )
+
+        # Re-key dependent tables.
+        for table in ("chat_members", "games", "moneyballs"):
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            if not exists:
+                continue
+            cur = conn.execute(
+                f"UPDATE {table} SET chat_id = ? WHERE chat_id = ?",
+                (new_chat_id, old_chat_id),
+            )
+            summary[f"{table}_updated"] = cur.rowcount
+
+        # Re-add any users that the stub knew about but the old chat didn't
+        # (rare: users who joined the group AFTER it migrated, before this
+        # handler fires). Default role; the next interaction's gate() will
+        # refresh from Telegram.
+        added_back = 0
+        for uid in stub_member_ids:
+            existing = conn.execute(
+                "SELECT 1 FROM chat_members WHERE chat_id = ? AND telegram_user_id = ?",
+                (new_chat_id, uid),
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    "INSERT INTO chat_members (chat_id, telegram_user_id, role) "
+                    "VALUES (?, ?, 'member')",
+                    (new_chat_id, uid),
+                )
+                added_back += 1
+        if stub_member_ids:
+            summary["stub_members_readded"] = added_back
+
+    return summary
+
+
 def is_chat_active(telegram_chat_id: int) -> bool:
     """True iff the chats row exists and status = 'active'."""
     row = get_chat(telegram_chat_id)

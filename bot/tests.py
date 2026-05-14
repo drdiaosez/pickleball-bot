@@ -210,6 +210,62 @@ def main():
     assert format_money(1234) == "$12.34"
     print(f"✓ format_money formats correctly")
 
+    # ─────── chat_id migration (regular group → supergroup) ─────── #
+    # Simulates the exact production scenario from May 2026: a user promoted
+    # someone to admin, Telegram converted the group to a supergroup, and a
+    # stub `chats` row was created for the new id by on_my_chat_member before
+    # the migration handler had a chance to run.
+    OLD = -5249408335
+    NEW = -1003990916602
+
+    db.upsert_chat(OLD, title="Power Playas")
+    # chat_members has a FK to members; create those first.
+    for uid in (100, 101, 102, 103, 999):
+        db.upsert_member(uid, f"MigUser{uid}", None)
+    for uid in (101, 102, 103):
+        db.upsert_chat_member(OLD, uid, role="member")
+    db.upsert_chat_member(OLD, 100, role="admin")
+    mig_gid = db.create_game(
+        datetime.now(tz) + timedelta(days=2), "Powerplay",
+        organizer_id=100, max_players=4, chat_id=OLD,
+    )
+
+    # Stub created by on_my_chat_member when the supergroup appeared
+    db.upsert_chat(NEW, title="Power Playas")
+    db.upsert_chat_member(NEW, 100, role="member")  # admin in OLD; member in stub
+    db.upsert_chat_member(NEW, 999, role="member")  # only known to NEW
+
+    summary = db.migrate_chat_id(OLD, NEW)
+    assert summary.get("stub_removed") is True
+    assert summary.get("games_updated") == 1
+    print(f"✓ migrate_chat_id summary: {summary}")
+
+    # OLD should be gone everywhere
+    assert db.get_chat(OLD) is None, "old chats row should be removed"
+    rows = db._conn.execute("SELECT COUNT(*) AS n FROM chat_members WHERE chat_id = ?", (OLD,)).fetchone()
+    assert rows["n"] == 0, "old chat_members should be re-keyed"
+    rows = db._conn.execute("SELECT COUNT(*) AS n FROM games WHERE chat_id = ?", (OLD,)).fetchone()
+    assert rows["n"] == 0, "old games should be re-keyed"
+
+    # NEW should have everything
+    new_chat = db.get_chat(NEW)
+    assert new_chat is not None and new_chat["title"] == "Power Playas"
+    assert db.get_game(mig_gid)["chat_id"] == NEW
+    # User 100 should keep their 'admin' role from OLD, not the stub's 'member'
+    cm = db.get_chat_member(NEW, 100)
+    assert cm and cm["role"] == "admin", f"expected admin, got {cm}"
+    # User 999 (only known to stub) should still be there
+    assert db.get_chat_member(NEW, 999) is not None
+    # OLD members should all be present under NEW
+    for uid in (100, 101, 102, 103):
+        assert db.get_chat_member(NEW, uid) is not None, f"user {uid} lost"
+    print(f"✓ all data re-keyed from OLD to NEW; stub-vs-old roles resolved correctly")
+
+    # Idempotent: running again is a no-op
+    summary2 = db.migrate_chat_id(OLD, NEW)
+    assert "no_op" in summary2
+    print(f"✓ migrate_chat_id is idempotent on second call")
+
     os.unlink(tmp.name)
     print("\n🎾  All tests passed.")
 
