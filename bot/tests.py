@@ -22,9 +22,11 @@ def main():
     for i in range(1, 6):
         db.upsert_member(i, f"User{i}", f"user{i}")
 
-    # Create a game with max 2 players (so we can easily fill it)
+    # Create a game with max 2 players (so we can easily fill it).
+    # chat_id is required since migration 002 (was missing in the original
+    # test scaffolding — fixed here as a drive-by).
     when = datetime.now(tz) + timedelta(days=1)
-    gid = db.create_game(when, "Test Court", organizer_id=1, max_players=2)
+    gid = db.create_game(when, "Test Court", organizer_id=1, max_players=2, chat_id=-1001)
     print(f"✓ Created game {gid}")
 
     # User 1 joins → confirmed
@@ -122,6 +124,91 @@ def main():
     my_games_u2 = db.list_games_for_member(2)
     assert len(my_games_u2) == 1
     print(f"✓ User2 sees 1 game")
+
+    # ─── Payment tracking ─── #
+    # Create a second game WITH payment set
+    when2 = datetime.now(tz) + timedelta(days=2)
+    pay_gid = db.create_game(
+        when2, "Pay Court", organizer_id=1, max_players=4,
+        chat_id=-1001, payment_amount_cents=750,  # $7.50
+    )
+    g = db.get_game(pay_gid)
+    assert g["payment_amount_cents"] == 750
+    print(f"✓ Game created with payment_amount_cents=750")
+
+    # Two users join — both default to unpaid
+    r1 = db.add_participant(pay_gid, added_by=1, member_id=1)
+    r2 = db.add_participant(pay_gid, added_by=2, member_id=2)
+    p1 = db.get_participant(r1["participant_id"])
+    p2 = db.get_participant(r2["participant_id"])
+    assert p1["is_paid"] == 0 and p2["is_paid"] == 0
+    print(f"✓ New participants default to is_paid=0")
+
+    # Toggle user1 → paid
+    updated = db.toggle_participant_paid(r1["participant_id"])
+    assert updated["is_paid"] == 1
+    print(f"✓ Toggling unpaid → paid works")
+
+    # Toggle again → unpaid
+    updated = db.toggle_participant_paid(r1["participant_id"])
+    assert updated["is_paid"] == 0
+    print(f"✓ Toggling paid → unpaid works")
+
+    # set_participant_paid direct
+    db.set_participant_paid(r1["participant_id"], True)
+    db.set_participant_paid(r2["participant_id"], True)
+    assert db.get_participant(r1["participant_id"])["is_paid"] == 1
+    assert db.get_participant(r2["participant_id"])["is_paid"] == 1
+    print(f"✓ set_participant_paid(True) works")
+
+    # Update payment amount — paid flags should be preserved when amount stays > 0
+    db.update_game_payment_amount(pay_gid, 1000)  # bump to $10
+    assert db.get_game(pay_gid)["payment_amount_cents"] == 1000
+    assert db.get_participant(r1["participant_id"])["is_paid"] == 1, "paid flag preserved on amount change"
+    print(f"✓ Changing amount preserves paid flags")
+
+    # Clear payment amount — paid flags should reset (they were meaningless without amount)
+    db.update_game_payment_amount(pay_gid, None)
+    assert db.get_game(pay_gid)["payment_amount_cents"] is None
+    assert db.get_participant(r1["participant_id"])["is_paid"] == 0
+    assert db.get_participant(r2["participant_id"])["is_paid"] == 0
+    print(f"✓ Clearing payment resets all paid flags")
+
+    # 0 should also clear (same effect as None)
+    db.update_game_payment_amount(pay_gid, 500)
+    db.set_participant_paid(r1["participant_id"], True)
+    db.update_game_payment_amount(pay_gid, 0)
+    assert db.get_game(pay_gid)["payment_amount_cents"] is None
+    assert db.get_participant(r1["participant_id"])["is_paid"] == 0
+    print(f"✓ Setting amount to 0 clears + resets paid flags")
+
+    # parse_payment edge cases (tested directly because the handler-level
+    # tests live in the conversation flow which is hard to invoke here)
+    from .handlers.newgame import parse_payment
+    assert parse_payment("5") == 500
+    assert parse_payment("$5") == 500
+    assert parse_payment("5.50") == 550
+    assert parse_payment("$5.50") == 550
+    assert parse_payment("5.5") == 550, "single-digit cents should be padded"
+    assert parse_payment("10.00") == 1000
+    assert parse_payment("0") == 0
+    assert parse_payment("$0") == 0
+    assert parse_payment("  $7.25  ") == 725, "whitespace tolerated"
+    assert parse_payment("abc") is None
+    assert parse_payment("") is None
+    assert parse_payment("5.999") is None, "3+ decimal places rejected"
+    assert parse_payment("$") is None
+    print(f"✓ parse_payment handles all expected inputs")
+
+    # format_money round-trip
+    from .views import format_money
+    assert format_money(None) == ""
+    assert format_money(0) == ""
+    assert format_money(500) == "$5"
+    assert format_money(750) == "$7.50"
+    assert format_money(1000) == "$10"
+    assert format_money(1234) == "$12.34"
+    print(f"✓ format_money formats correctly")
 
     os.unlink(tmp.name)
     print("\n🎾  All tests passed.")

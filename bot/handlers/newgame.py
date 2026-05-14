@@ -30,7 +30,7 @@ from ..chat_picker import resolve_chat
 from .common import touch_member
 
 # Conversation states
-ASK_WHEN, ASK_LOCATION, ASK_MAX, ASK_NOTES = range(4)
+ASK_WHEN, ASK_LOCATION, ASK_MAX, ASK_PAYMENT, ASK_NOTES = range(5)
 
 
 # ─────────────────────── date parsing ─────────────────────── #
@@ -245,6 +245,52 @@ async def got_max(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return ASK_MAX
 
     await update.effective_message.reply_html(
+        "💰 <b>Payment per person?</b>\n\n"
+        "Send an amount like <code>5</code>, <code>$7.50</code>, or <code>10.00</code>. "
+        "Send /skip if there's nothing to collect."
+    )
+    return ASK_PAYMENT
+
+
+# Accept "$5", "5", "5.50", "$5.50", "5,00". Reject anything else as bad input.
+_PAYMENT_RE = re.compile(r"^\s*\$?\s*(\d+)(?:[.,](\d{1,2}))?\s*$")
+
+
+def parse_payment(text: str) -> int | None:
+    """Parse a money string into cents, or return None for unparseable input.
+
+    Returns 0 for explicit zero ("0", "$0", "0.00") so the caller can distinguish
+    that case from a parse failure if it cares. The newgame flow treats 0 the
+    same as /skip (stored as NULL), but the edit flow uses 0 as an explicit
+    "clear the amount" signal.
+    """
+    m = _PAYMENT_RE.match(text)
+    if not m:
+        return None
+    dollars = int(m.group(1))
+    cents_str = m.group(2) or "0"
+    # Pad single-digit cents: "5.5" → 50 cents, not 5 cents
+    if len(cents_str) == 1:
+        cents_str += "0"
+    cents = int(cents_str)
+    return dollars * 100 + cents
+
+
+async def got_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = (update.effective_message.text or "").strip()
+    if text.startswith("/skip"):
+        context.user_data["newgame"]["payment_amount_cents"] = None
+    else:
+        cents = parse_payment(text)
+        if cents is None:
+            await update.effective_message.reply_text(
+                "Couldn't read that. Send an amount like '5', '$7.50', or /skip."
+            )
+            return ASK_PAYMENT
+        # Treat $0 as "no payment" — same as /skip — so the card stays clean.
+        context.user_data["newgame"]["payment_amount_cents"] = cents if cents > 0 else None
+
+    await update.effective_message.reply_html(
         "📝 <b>Any notes?</b> (e.g. \"bring 4 balls\") — or /skip"
     )
     return ASK_NOTES
@@ -265,6 +311,7 @@ async def got_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         max_players=data["max_players"],
         notes=notes,
         chat_id=chat_id,
+        payment_amount_cents=data.get("payment_amount_cents"),
     )
 
     # Post the game card and remember its message_id so we can edit later
@@ -293,6 +340,10 @@ def build_newgame_handler() -> ConversationHandler:
             ASK_MAX: [
                 MessageHandler(filters.Regex(r"^/skip"), got_max),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, got_max),
+            ],
+            ASK_PAYMENT: [
+                MessageHandler(filters.Regex(r"^/skip"), got_payment),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, got_payment),
             ],
             ASK_NOTES: [
                 MessageHandler(filters.Regex(r"^/skip"), got_notes),

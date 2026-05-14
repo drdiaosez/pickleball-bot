@@ -48,16 +48,17 @@ def _create_schema() -> None:
         );
 
         CREATE TABLE IF NOT EXISTS games (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            scheduled_for  TEXT NOT NULL,         -- ISO timestamp
-            location       TEXT NOT NULL,
-            organizer_id   INTEGER NOT NULL REFERENCES members(telegram_id),
-            max_players    INTEGER NOT NULL DEFAULT 4,
-            status         TEXT NOT NULL DEFAULT 'open',  -- open|cancelled|completed
-            notes          TEXT,
-            chat_id        INTEGER,               -- group chat where it was created
-            message_id     INTEGER,               -- the card message we can edit
-            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            scheduled_for         TEXT NOT NULL,         -- ISO timestamp
+            location              TEXT NOT NULL,
+            organizer_id          INTEGER NOT NULL REFERENCES members(telegram_id),
+            max_players           INTEGER NOT NULL DEFAULT 4,
+            status                TEXT NOT NULL DEFAULT 'open',  -- open|cancelled|completed
+            notes                 TEXT,
+            chat_id               INTEGER,               -- group chat where it was created
+            message_id            INTEGER,               -- the card message we can edit
+            payment_amount_cents  INTEGER,               -- per-person cost in cents; NULL = none
+            created_at            TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
         CREATE INDEX IF NOT EXISTS idx_games_scheduled ON games(scheduled_for);
@@ -72,6 +73,7 @@ def _create_schema() -> None:
             guest_name  TEXT,
             added_by    INTEGER NOT NULL REFERENCES members(telegram_id),
             added_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            is_paid     INTEGER NOT NULL DEFAULT 0,  -- 1 once they've paid; only meaningful when game has payment_amount
 
             -- exactly one of member_id / guest_name must be set
             CHECK (
@@ -245,14 +247,15 @@ def create_game(
     max_players: int = 4,
     notes: Optional[str] = None,
     chat_id: Optional[int] = None,
+    payment_amount_cents: Optional[int] = None,
 ) -> int:
     assert _conn is not None
     cur = _conn.execute(
         """
-        INSERT INTO games (scheduled_for, location, organizer_id, max_players, notes, chat_id)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO games (scheduled_for, location, organizer_id, max_players, notes, chat_id, payment_amount_cents)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (scheduled_for.isoformat(), location, organizer_id, max_players, notes, chat_id),
+        (scheduled_for.isoformat(), location, organizer_id, max_players, notes, chat_id, payment_amount_cents),
     )
     return cur.lastrowid
 
@@ -489,6 +492,45 @@ def update_game_notes(game_id: int, notes: Optional[str]) -> None:
     """Set or clear a game's notes/description. Pass None to clear."""
     assert _conn is not None
     _conn.execute("UPDATE games SET notes = ? WHERE id = ?", (notes, game_id))
+
+
+def update_game_payment_amount(game_id: int, amount_cents: Optional[int]) -> None:
+    """Set or clear a game's per-person payment amount.
+
+    Pass None (or 0) to clear; we normalize both to NULL so the UI treats
+    them the same way ("no payment to track"). When a payment amount is
+    cleared, we also reset every participant's paid flag — those marks
+    were meaningless without an amount and would be confusing if a future
+    edit re-introduced one.
+    """
+    assert _conn is not None
+    if amount_cents is None or amount_cents <= 0:
+        with transaction():
+            _conn.execute("UPDATE games SET payment_amount_cents = NULL WHERE id = ?", (game_id,))
+            _conn.execute("UPDATE participants SET is_paid = 0 WHERE game_id = ?", (game_id,))
+    else:
+        _conn.execute(
+            "UPDATE games SET payment_amount_cents = ? WHERE id = ?",
+            (int(amount_cents), game_id),
+        )
+
+
+def set_participant_paid(participant_id: int, paid: bool) -> Optional[dict]:
+    """Set a participant's is_paid flag. Returns the updated participant row."""
+    assert _conn is not None
+    _conn.execute(
+        "UPDATE participants SET is_paid = ? WHERE id = ?",
+        (1 if paid else 0, participant_id),
+    )
+    return get_participant(participant_id)
+
+
+def toggle_participant_paid(participant_id: int) -> Optional[dict]:
+    """Flip is_paid on a participant. Returns the updated participant row."""
+    p = get_participant(participant_id)
+    if not p:
+        return None
+    return set_participant_paid(participant_id, not bool(p.get("is_paid")))
 
 
 # ─────────────────────────── guest → member merge ─────────────────────────── #

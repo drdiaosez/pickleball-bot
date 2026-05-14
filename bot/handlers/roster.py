@@ -19,6 +19,9 @@ Actions:
   swap_pick:<wait_pid>     — show picker for which confirmed person to bump
   swap_do:<wait_pid>:<conf_pid> — execute the soft swap
   swap_cancel              — cancel a swap-in-progress
+  edit_pay:<game_id>       — prompt for a new per-person payment amount
+  paid:<game_id>           — open the paid-picker view
+  pay_toggle:<pid>         — flip a participant's paid flag
 """
 from __future__ import annotations
 
@@ -58,6 +61,7 @@ async def post_game_card(context: ContextTypes.DEFAULT_TYPE, chat_id: int, game_
         game_id,
         viewer_in_game=None,  # generic — buttons re-render per viewer via refresh
         game_full=confirmed >= game["max_players"],
+        has_payment=views.game_has_payment(game),
     )
 
     msg = await context.bot.send_message(
@@ -93,6 +97,7 @@ async def render_card_in_place(
         game_id,
         viewer_in_game=viewer_state,
         game_full=confirmed >= game["max_players"],
+        has_payment=views.game_has_payment(game),
     )
 
     query = update.callback_query
@@ -218,6 +223,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         elif action == "edit_notes":
             await _prompt_edit_notes(context, update, int(args[0]), user.id)
 
+        elif action == "edit_pay":
+            await _prompt_edit_payment(context, update, int(args[0]), user.id)
+
+        elif action == "paid":
+            await _show_paid_picker(context, update, int(args[0]))
+
+        elif action == "pay_toggle":
+            await _do_toggle_paid(context, update, int(args[0]), user.id)
+
         elif action == "delete":
             await _confirm_delete(update, int(args[0]))
 
@@ -265,6 +279,7 @@ async def _open_card(
         game_id,
         viewer_in_game=viewer_state,
         game_full=confirmed >= game["max_players"],
+        has_payment=views.game_has_payment(game),
     )
     msg = await update.callback_query.message.reply_html(text, reply_markup=kb)
     # Update the canonical card message reference to this newest one.
@@ -566,6 +581,86 @@ async def _prompt_edit_notes(
     )
 
 
+async def _prompt_edit_payment(
+    context: ContextTypes.DEFAULT_TYPE, update: Update, game_id: int, user_id: int
+) -> None:
+    context.user_data["pending_edit"] = {"game_id": game_id, "field": "payment"}
+    chat_id = update.effective_chat.id
+    game = db.get_game(game_id)
+    current_cents = game.get("payment_amount_cents") if game else None
+    current_line = (
+        f"\n\nCurrent: <b>{views.format_money(current_cents)}</b> per person"
+        if current_cents else "\n\nCurrent: <i>no payment set</i>"
+    )
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"@{update.effective_user.username or update.effective_user.first_name}, "
+            "reply with the new per-person amount (e.g. <code>5</code>, <code>$7.50</code>). "
+            "Send <code>clear</code> or <code>0</code> to remove the payment, "
+            "or /canceledit to abort."
+            f"{current_line}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def _show_paid_picker(
+    context: ContextTypes.DEFAULT_TYPE, update: Update, game_id: int
+) -> None:
+    """Replace the game card with the paid-picker view."""
+    tz = context.bot_data["tz"]
+    game = db.get_game(game_id)
+    if not game:
+        await update.callback_query.answer("Game not found.", show_alert=True)
+        return
+    if not views.game_has_payment(game):
+        # Edge case: someone tapped Paid on a stale card after the amount was cleared.
+        await update.callback_query.answer("No payment set on this game.", show_alert=True)
+        return
+    participants = db.get_participants(game_id)
+    confirmed = [p for p in participants if p["status"] == "confirmed"]
+    if not confirmed:
+        await update.callback_query.answer("Nobody's confirmed yet.", show_alert=True)
+        return
+    text = views.render_paid_picker(game, participants, tz)
+    kb = views.paid_picker_keyboard(game_id, participants)
+    try:
+        await update.callback_query.edit_message_text(
+            text=text, parse_mode=ParseMode.HTML, reply_markup=kb
+        )
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
+
+
+async def _do_toggle_paid(
+    context: ContextTypes.DEFAULT_TYPE, update: Update, participant_id: int, viewer_id: int
+) -> None:
+    """Flip a participant's paid flag, then re-render the paid picker."""
+    p = db.get_participant(participant_id)
+    if not p:
+        await update.callback_query.answer("Participant not found.", show_alert=True)
+        return
+    updated = db.toggle_participant_paid(participant_id)
+    if not updated:
+        await update.callback_query.answer("Couldn't update.", show_alert=True)
+        return
+    # Re-render the picker so the badge flips in place
+    tz = context.bot_data["tz"]
+    game = db.get_game(p["game_id"])
+    participants = db.get_participants(p["game_id"])
+    text = views.render_paid_picker(game, participants, tz)
+    kb = views.paid_picker_keyboard(p["game_id"], participants)
+    try:
+        await update.callback_query.edit_message_text(
+            text=text, parse_mode=ParseMode.HTML, reply_markup=kb
+        )
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
+
+
 async def on_edit_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Catches the next text message after an edit_* button, if pending."""
     pending = context.user_data.get("pending_edit")
@@ -631,6 +726,31 @@ async def on_edit_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.effective_message.reply_text("✓ Notes cleared.")
         else:
             await update.effective_message.reply_html(f"✓ Notes updated to <b>{new_notes}</b>.")
+
+    elif field == "payment":
+        # "clear"/"none" or 0 wipes; otherwise parse as money. parse_payment
+        # already accepts "$5", "5", "5.50", etc. and returns cents.
+        from .newgame import parse_payment
+        if text.lower() in ("clear", "none", "remove", "delete"):
+            new_cents = None
+        else:
+            cents = parse_payment(text)
+            if cents is None:
+                await update.effective_message.reply_text(
+                    "Couldn't read that. Send an amount like '5', '$7.50', or 'clear'."
+                )
+                return
+            # 0 means clear, matching the newgame flow
+            new_cents = cents if cents > 0 else None
+        # Whether we cleared or set, this also resets is_paid flags when cleared.
+        db.update_game_payment_amount(game_id, new_cents)
+        context.user_data.pop("pending_edit", None)
+        if new_cents is None:
+            await update.effective_message.reply_text("✓ Payment cleared.")
+        else:
+            await update.effective_message.reply_html(
+                f"✓ Payment set to <b>{views.format_money(new_cents)}</b> per person."
+            )
 
     elif field == "max":
         try:

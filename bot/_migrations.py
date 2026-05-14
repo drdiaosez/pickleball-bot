@@ -242,8 +242,31 @@ def _002_games_chat_id_not_null(conn: sqlite3.Connection) -> None:
             conn.execute("PRAGMA foreign_keys = ON")
 
 
+# ─────────────────────── 003: payment tracking ───────────────────────
+
+def _003_payment_tracking(conn: sqlite3.Connection) -> None:
+    """Add per-person payment tracking.
+
+    games.payment_amount_cents: optional INTEGER in cents (NULL = no payment).
+        Stored as cents to avoid floating-point money math. NULL and 0 are
+        treated as equivalent ("no payment to track") in the UI; we store
+        NULL for "unset" and only render the column when > 0.
+
+    participants.is_paid: INTEGER 0/1, default 0. Only meaningful when the
+        parent game has a non-NULL/non-zero payment_amount_cents.
+    """
+    games_cols = {r["name"] for r in conn.execute("PRAGMA table_info(games)").fetchall()}
+    if "payment_amount_cents" not in games_cols:
+        conn.execute("ALTER TABLE games ADD COLUMN payment_amount_cents INTEGER")
+
+    part_cols = {r["name"] for r in conn.execute("PRAGMA table_info(participants)").fetchall()}
+    if "is_paid" not in part_cols:
+        conn.execute("ALTER TABLE participants ADD COLUMN is_paid INTEGER NOT NULL DEFAULT 0")
+
+
 # Append future migrations here as ("003_name", _003_func), etc.
 MIGRATIONS: list[tuple[str, Callable[[sqlite3.Connection], None]]] = [
     ("001_multi_chat_schema", _001_multi_chat_schema),
     ("002_games_chat_id_not_null", _002_games_chat_id_not_null),
+    ("003_payment_tracking", _003_payment_tracking),
 ]
