@@ -161,17 +161,27 @@ async def on_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # commands re-prompt.
     context.user_data[_PICKER_ONESHOT_KEY] = chat_id
 
-    # Look up and re-dispatch the original handler
+    # Look up the original handler
     handler = COMMAND_REGISTRY.get(command_label)
+
+    # Acknowledge selection by editing the picker message
+    title = chat.get("title") or f"Chat {chat_id}"
+
     if handler is None:
-        await q.edit_message_text(
-            f"Unknown command /{escape(command_label)}. Run it again."
-        )
+        # Some commands (like /newgame, which is a ConversationHandler) can't
+        # be cleanly re-dispatched from a callback. Tell the user to retype;
+        # the one-shot flag will route their retyped command to the picked
+        # chat without prompting again.
+        try:
+            await q.edit_message_text(
+                f"📂 <b>{escape(title)}</b>\n\n"
+                f"Now send <code>/{escape(command_label)}</code> again to continue.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
         return
 
-    # Acknowledge selection by editing the picker message; the handler will
-    # send its own follow-up reply.
-    title = chat.get("title") or f"Chat {chat_id}"
     try:
         await q.edit_message_text(
             f"📂 <b>{escape(title)}</b>",
