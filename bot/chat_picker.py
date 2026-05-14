@@ -5,21 +5,18 @@ which group chat they mean. This module provides:
 
   resolve_chat(update, context, command_label) → int | None
     - In a group: returns the group's chat_id, no picker shown.
-    - In a DM, if the user has already picked a chat in this conversation:
-      returns the cached chat_id.
     - In a DM, if the user is in exactly one active chat: returns that chat_id
       (no picker — only one possible answer).
-    - In a DM, if the user is in multiple chats: shows the picker, returns None.
-      The caller must just `return` — the picker callback will re-dispatch the
-      command once the user taps a chat.
+    - In a DM with multiple chats: shows the picker, returns None. The caller
+      must just `return` — the picker callback will re-dispatch the command
+      once the user taps a chat. We do NOT cache the picked chat across
+      commands; every DM command re-prompts so users can switch contexts.
 
   pick_callback_handler — registered once in main.py. Handles taps on the
-    picker, sets context.user_data["selected_chat_id"], and re-dispatches by
-    looking up the command handler in COMMAND_REGISTRY.
-
-Cache lifetime: selected_chat_id lives in context.user_data and persists for
-the user's session (PTB's user_data is per-user, in-memory by default). It
-resets when the bot restarts, which is acceptable — one extra tap.
+    picker. Stashes the picked chat in a one-shot user_data flag, then
+    re-dispatches by looking up the command handler in COMMAND_REGISTRY.
+    resolve_chat consumes the one-shot flag so the immediate re-dispatch
+    uses the picked chat without prompting again.
 """
 from __future__ import annotations
 
@@ -47,7 +44,7 @@ def register_command(name: str, handler) -> None:
     COMMAND_REGISTRY[name] = handler
 
 
-SELECTED_KEY = "selected_chat_id"
+_PICKER_ONESHOT_KEY = "_picker_oneshot_chat_id"
 PICKER_CALLBACK_PREFIX = "pick_chat:"
 
 
@@ -67,20 +64,22 @@ async def resolve_chat(
     if chat is None or user is None:
         return None
 
-    # Group chat → use it directly. Also remember it as the user's "last
-    # selected" in case they jump to a DM later.
+    # Group chat → use it directly.
     if chat.type in ("group", "supergroup"):
-        context.user_data[SELECTED_KEY] = chat.id
         return chat.id
 
-    # DM. Was a chat already picked this session?
-    cached = context.user_data.get(SELECTED_KEY)
+    # DM. Always show the picker if there's more than one option — we don't
+    # cache the previous pick across commands, because users expect to be
+    # able to switch contexts freely. EXCEPTION: when the picker has just
+    # been tapped, on_pick_callback sets a one-shot flag so the immediate
+    # re-dispatch uses the picked chat without prompting again.
+    one_shot = context.user_data.pop(_PICKER_ONESHOT_KEY, None)
+
     available = db.list_active_chats_for_user(user.id)
     available_ids = {c["telegram_chat_id"] for c in available}
 
-    # Cached value is only valid if the user is still a member of that chat
-    if cached is not None and cached in available_ids:
-        return cached
+    if one_shot is not None and one_shot in available_ids:
+        return one_shot
 
     if not available:
         # Should not happen — gate() filters this out. But be safe.
@@ -93,10 +92,9 @@ async def resolve_chat(
     # Exactly one option? Auto-pick it.
     if len(available) == 1:
         only = available[0]["telegram_chat_id"]
-        context.user_data[SELECTED_KEY] = only
         return only
 
-    # Multiple options → show picker.
+    # Multiple options → show picker every time.
     await _show_picker(update, context, command_label, available)
     return None
 
@@ -158,8 +156,10 @@ async def on_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
-    # Remember this pick for the rest of the session
-    context.user_data[SELECTED_KEY] = chat_id
+    # Set the one-shot flag so the immediate re-dispatch picks this chat
+    # without prompting again. resolve_chat pops the flag so subsequent
+    # commands re-prompt.
+    context.user_data[_PICKER_ONESHOT_KEY] = chat_id
 
     # Look up and re-dispatch the original handler
     handler = COMMAND_REGISTRY.get(command_label)
