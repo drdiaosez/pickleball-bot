@@ -267,8 +267,10 @@ async def _open_card(
         game_full=confirmed >= game["max_players"],
     )
     msg = await update.callback_query.message.reply_html(text, reply_markup=kb)
-    # Update the canonical card message reference to this newest one
-    db.set_game_message(game_id, msg.chat_id, msg.message_id)
+    # Update the canonical card message reference to this newest one.
+    # IMPORTANT: only update message_id, NOT chat_id — opening a card in DM
+    # must not rewrite the game's group ownership.
+    db.set_game_message_only(game_id, msg.message_id)
 
 
 async def _handle_join(

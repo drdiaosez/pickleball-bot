@@ -264,10 +264,31 @@ def get_game(game_id: int) -> Optional[dict]:
 
 
 def set_game_message(game_id: int, chat_id: int, message_id: int) -> None:
+    """Set the canonical card location (chat_id + message_id).
+
+    Used ONLY when first posting a card for a new game, where the posting
+    chat IS the chat the game belongs to. Do NOT call from re-renders that
+    open the card in a DM — that would rewrite the game's tenancy. Use
+    set_game_message_only() for those.
+    """
     assert _conn is not None
     _conn.execute(
         "UPDATE games SET chat_id = ?, message_id = ? WHERE id = ?",
         (chat_id, message_id, game_id),
+    )
+
+
+def set_game_message_only(game_id: int, message_id: int) -> None:
+    """Update just the canonical message reference, NOT the chat_id.
+
+    Used when re-rendering a card in a different chat (e.g. opening a game
+    from `/games` in a DM). The game still belongs to its original group;
+    we just point at the most recent rendered copy for future edits.
+    """
+    assert _conn is not None
+    _conn.execute(
+        "UPDATE games SET message_id = ? WHERE id = ?",
+        (message_id, game_id),
     )
 
 
