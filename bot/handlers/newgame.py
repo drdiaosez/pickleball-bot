@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram.ext import (
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -207,11 +208,75 @@ async def got_when(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ASK_WHEN
 
     context.user_data["newgame"]["scheduled_for"] = dt
-    await update.effective_message.reply_html(
-        f"Got it: <b>{views.format_when(dt.isoformat(), tz)}</b>\n\n"
-        "📍 <b>Where?</b> (e.g. <code>Riverside Club, Court 3</code>)"
-    )
+
+    # Offer up to 3 recent locations from this chat as quick-pick buttons.
+    # If there's no history yet, fall back to the original free-text prompt.
+    chat_id = context.user_data.get("newgame_chat_id")
+    recent: list[str] = db.list_recent_locations(chat_id, limit=3) if chat_id else []
+    context.user_data["newgame_recent_locations"] = recent
+
+    confirm = f"Got it: <b>{views.format_when(dt.isoformat(), tz)}</b>\n\n"
+    if recent:
+        await update.effective_message.reply_html(
+            confirm + "📍 <b>Where?</b> Pick a recent spot or choose a different location.",
+            reply_markup=views.recent_locations_keyboard(recent),
+        )
+    else:
+        await update.effective_message.reply_html(
+            confirm + "📍 <b>Where?</b> (e.g. <code>Riverside Club, Court 3</code>)"
+        )
     return ASK_LOCATION
+
+
+async def picked_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle a tap on the recent-locations keyboard.
+
+    `newloc:<idx>` — picks recent_locations[idx] and advances to ASK_MAX.
+    `newloc:new`   — user wants to type a fresh location; stay in ASK_LOCATION
+                     and wait for the text handler.
+    """
+    query = update.callback_query
+    await query.answer()
+    payload = (query.data or "").split(":", 1)[1] if ":" in (query.data or "") else ""
+
+    if payload == "new":
+        # Drop the keyboard so the user can't double-tap, then prompt for text.
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await query.message.reply_html(
+            "📍 <b>Type the location.</b> (e.g. <code>Riverside Club, Court 3</code>)"
+        )
+        return ASK_LOCATION
+
+    try:
+        idx = int(payload)
+    except ValueError:
+        return ASK_LOCATION
+    recent: list[str] = context.user_data.get("newgame_recent_locations") or []
+    if not (0 <= idx < len(recent)):
+        # Stale callback (user_data cleared, bot restarted) — re-prompt by text.
+        await query.message.reply_text(
+            "That option expired. Type the location instead."
+        )
+        return ASK_LOCATION
+
+    location = recent[idx]
+    context.user_data["newgame"]["location"] = location
+    context.user_data.pop("newgame_recent_locations", None)
+    # Strip the keyboard from the prompt and show the picked location inline.
+    from telegram.helpers import escape
+    try:
+        await query.edit_message_text(
+            f"📍 <b>{escape(location)}</b>", parse_mode="HTML"
+        )
+    except Exception:
+        pass
+    await query.message.reply_html(
+        "👥 <b>Max players?</b> (Send a number, or /skip for 4)"
+    )
+    return ASK_MAX
 
 
 async def got_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -224,6 +289,7 @@ async def got_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ASK_LOCATION
 
     context.user_data["newgame"]["location"] = location
+    context.user_data.pop("newgame_recent_locations", None)
     await update.effective_message.reply_html(
         "👥 <b>Max players?</b> (Send a number, or /skip for 4)"
     )
@@ -321,12 +387,14 @@ async def got_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text("✓ Game posted above.")
     context.user_data.pop("newgame", None)
     context.user_data.pop("newgame_chat_id", None)
+    context.user_data.pop("newgame_recent_locations", None)
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("newgame", None)
     context.user_data.pop("newgame_chat_id", None)
+    context.user_data.pop("newgame_recent_locations", None)
     await update.effective_message.reply_text("Cancelled.")
     return ConversationHandler.END
 
@@ -336,7 +404,10 @@ def build_newgame_handler() -> ConversationHandler:
         entry_points=[CommandHandler("newgame", start_newgame)],
         states={
             ASK_WHEN:     [MessageHandler(filters.TEXT & ~filters.COMMAND, got_when)],
-            ASK_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_location)],
+            ASK_LOCATION: [
+                CallbackQueryHandler(picked_location, pattern=r"^newloc:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, got_location),
+            ],
             ASK_MAX: [
                 MessageHandler(filters.Regex(r"^/skip"), got_max),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, got_max),

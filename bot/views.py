@@ -155,6 +155,23 @@ def game_card_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
+def recent_locations_keyboard(locations: list[str]) -> InlineKeyboardMarkup:
+    """Quick-pick keyboard for the /newgame location step.
+
+    One row per recent location (tapping picks it), plus a final row with a
+    "Different location" button that opens the free-text path. Callback data
+    is a short index — the actual location string is stashed in user_data by
+    the caller so we don't blow the 64-byte callback_data cap on long names.
+    """
+    rows = []
+    for idx, loc in enumerate(locations):
+        # Button label can be long; we only need to keep callback_data short.
+        label = loc if len(loc) <= 40 else loc[:37] + "…"
+        rows.append([InlineKeyboardButton(f"📍 {label}", callback_data=f"newloc:{idx}")])
+    rows.append([InlineKeyboardButton("✏️ Different location", callback_data="newloc:new")])
+    return InlineKeyboardMarkup(rows)
+
+
 def member_picker_keyboard(game_id: int, members: list[dict]) -> InlineKeyboardMarkup:
     """Buttons for picking a chat member to add to a game.
     Each member becomes a tappable row. Last row is a cancel."""

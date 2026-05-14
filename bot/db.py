@@ -529,6 +529,28 @@ def list_games_in_range(start: datetime, end: datetime, chat_id: Optional[int] =
     return out
 
 
+def list_recent_locations(chat_id: int, limit: int = 3) -> list[str]:
+    """Return up to `limit` most-recently-used distinct locations for a chat.
+
+    Ordered by the latest `created_at` of any game using that location, newest first.
+    Cancelled games still count — operators often re-use a location even after a cancel.
+    Used by the /newgame flow to offer quick-pick buttons.
+    """
+    assert _conn is not None
+    rows = _conn.execute(
+        """
+        SELECT location
+        FROM games
+        WHERE chat_id = ? AND location IS NOT NULL AND TRIM(location) != ''
+        GROUP BY location
+        ORDER BY MAX(created_at) DESC
+        LIMIT ?
+        """,
+        (chat_id, limit),
+    ).fetchall()
+    return [r["location"] for r in rows]
+
+
 def list_members_not_in_game(game_id: int, chat_id: Optional[int] = None) -> list[dict]:
     """All known members who aren't already on a game's roster (confirmed or waitlist).
     Used to populate the 'Add Member' picker. Sorted by display_name.
