@@ -127,6 +127,15 @@ async def gate(update: Update) -> bool:
     user = update.effective_user
     if chat and user and chat.type in ("group", "supergroup"):
         try:
+            # IMPORTANT: upsert the user into `members` FIRST. The chat_members
+            # table has a FK to members(telegram_id), so syncing chat_members
+            # for a never-seen-before user (e.g. someone who just tapped a
+            # button on an old game card without ever typing) raises
+            # IntegrityError if `members` is empty for that id. Individual
+            # handlers call touch_member() AFTER gate() returns True, which is
+            # too late for the sync_user_in_chat() call below.
+            await touch_member(update)
+
             # Late import to avoid circular dependency with bot.chats
             from .. import chats as chats_mod
             await chats_mod.ensure_chat_registered(update.get_bot(), chat)
