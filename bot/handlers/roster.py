@@ -877,22 +877,45 @@ def _name(p: dict) -> str:
 async def _show_member_picker(
     context: ContextTypes.DEFAULT_TYPE, update: Update, game_id: int
 ) -> None:
-    """Replace the game card with a picker showing members not yet on the roster."""
+    """Replace the game card with a picker showing members not yet on the roster.
+
+    Empty-state caveat: we can't show the empty-state via
+    callback_query.answer(text, show_alert=True) because on_callback() calls
+    answer() at the top to dismiss the spinner, and Telegram only honors one
+    answer per callback query. So when there are no candidates we edit the
+    card to show an explanatory empty-state with a Back button.
+    """
     game = db.get_game(game_id)
     if not game:
         return
     chat_id = game.get("chat_id")
     members = db.list_members_not_in_game(game_id, chat_id=chat_id)
-    if not members:
-        await update.callback_query.answer(
-            "All known members are already on this game's roster.",
-            show_alert=True,
-        )
-        return
-
-    # Build a lightweight preface so it's clear what's happening
     tz = context.bot_data["tz"]
     when = views.format_when(game["scheduled_for"], tz)
+
+    if not members:
+        text = (
+            f"<b>Add member to:</b>\n"
+            f"<i>{when} @ {game['location']}</i>\n\n"
+            f"<i>Nobody available to add — everyone the bot knows about in "
+            f"this group is already on the roster.</i>\n\n"
+            f"<i>The bot only sees members who have sent a message or tapped "
+            f"a button on a bot message. If you want to add someone the bot "
+            f"hasn't seen yet, use <b>+ Add Guest</b> and type their name, or "
+            f"ask them to say hi in the group first.</i>"
+        )
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("← Back to game card", callback_data=f"refresh:{game_id}"),
+        ]])
+        try:
+            await update.callback_query.edit_message_text(
+                text=text, parse_mode=ParseMode.HTML, reply_markup=kb,
+            )
+        except BadRequest as e:
+            if "not modified" not in str(e).lower():
+                raise
+        return
+
     text = (
         f"<b>Add member to:</b>\n"
         f"<i>{when} @ {game['location']}</i>\n\n"
