@@ -303,10 +303,10 @@ async function refresh() {
   if (data && !data._error) {
     state = data;
     render();
-  } else if (data && data._status === 403) {
-    renderGate("This view is admin-only — ask a chat admin to manage the game.");
   } else if (data && data._status === 404) {
     renderGate("Game not found — it may have been deleted.");
+  } else if (data && data._status === 403) {
+    renderGate("You don't have access to this game — make sure you're a member of the chat that created it.");
   }
 }
 
@@ -545,11 +545,6 @@ function renderDangerZone() {
 function render() {
   if (!state) return;
   const { game, viewer, counts, participants } = state;
-
-  if (!viewer.is_admin) {
-    renderGate("This view is admin-only — ask a chat admin to manage the game.");
-    return;
-  }
 
   root.innerHTML = `
     ${renderHeader(game, counts)}

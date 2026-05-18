@@ -4,8 +4,8 @@ Serves three Telegram Mini Apps:
 
   • /register — every chat member can self-serve their signup status
     (join / leave), plus add and remove their own guests.
-  • /manage   — chat admins can edit anyone's signup, change game details,
-    or delete the game.
+  • /manage   — any chat member can edit anyone's signup, change game
+    details, or delete the game.
   • /moneyball — the existing tournament scoring app.
 
 Auth model for /api endpoints:
@@ -39,7 +39,7 @@ from zoneinfo import ZoneInfo
 from aiohttp import web
 from telegram import Bot
 
-from . import db, moneyball, views, admins, notifications
+from . import db, moneyball, views, notifications
 
 log = logging.getLogger(__name__)
 
@@ -187,16 +187,9 @@ def _get_moneyball_chat_id(mb_id: int):
     return row["chat_id"] if row else None
 
 
-async def _require_admin(request: web.Request) -> Optional[web.Response]:
-    """Helper for admin-only endpoints. Returns a Response on failure, or None on success."""
-    bot: Bot = request.app["bot"]
-    chat_id = request.get("chat_id")
-    user_id = request["user_id"]
-    if chat_id is None:
-        return web.json_response({"error": "game has no chat"}, status=400)
-    if not await admins.is_chat_admin(bot, chat_id, user_id):
-        return web.json_response({"error": "admin only"}, status=403)
-    return None
+# Manage endpoints are open to every chat member — no admin gate. The
+# auth middleware already enforces chat membership, which is the actual
+# trust boundary we want.
 
 
 # ─────────────────────────────────────────────
@@ -314,19 +307,12 @@ def _participant_dict(p: dict) -> dict:
     }
 
 
-async def _build_game_state(
-    request: web.Request, *, include_admin_extras: Optional[bool] = None
-) -> dict:
+async def _build_game_state(request: web.Request) -> dict:
     """Assemble the JSON payload both mini-apps consume."""
     game: dict = request["game"]
     user_id: int = request["user_id"]
     chat_id = request.get("chat_id")
     tz: ZoneInfo = request.app["tz"]
-
-    bot: Bot = request.app["bot"]
-    is_admin = False
-    if chat_id is not None:
-        is_admin = await admins.is_chat_admin(bot, chat_id, user_id)
 
     participants = db.get_participants(game["id"])
     organizer = db.get_member(game["organizer_id"])
@@ -359,7 +345,7 @@ async def _build_game_state(
         },
         "viewer": {
             "user_id": user_id,
-            "is_admin": is_admin,
+            "is_admin": True,  # legacy field; Manage is open to all chat members
             "registration": _participant_dict(own) if own else None,
             "guests": [_participant_dict(g) for g in my_guests],
         },
@@ -374,12 +360,9 @@ async def _build_game_state(
         },
     }
 
-    # The admin mini-app needs the picker of members-not-yet-on-the-game.
-    # Default to "include only if viewer is admin" so non-admin payloads
-    # stay slim; callers can override with the kwarg.
-    if include_admin_extras is None:
-        include_admin_extras = is_admin
-    if include_admin_extras and chat_id is not None:
+    # Manage mini-app needs the picker of members-not-yet-on-the-game.
+    # No admin gate anymore, so include it whenever we know the chat.
+    if chat_id is not None:
         payload["available_members"] = [
             {"telegram_id": m["telegram_id"], "display_name": m["display_name"]}
             for m in db.list_members_not_in_game(game["id"], chat_id=chat_id)
@@ -553,9 +536,6 @@ async def admin_add_member(request: web.Request) -> web.Response:
 
     body: {"member_id": int}
     """
-    err = await _require_admin(request)
-    if err is not None:
-        return err
     game: dict = request["game"]
     user_id: int = request["user_id"]
     chat_id = request["chat_id"]
@@ -584,13 +564,10 @@ async def admin_add_member(request: web.Request) -> web.Response:
 
 
 async def admin_add_guest(request: web.Request) -> web.Response:
-    """Admin adds a guest with an arbitrary `added_by` (defaults to the admin).
+    """Add a guest with an arbitrary `added_by` (defaults to the caller).
 
     body: {"name": str, "added_by"?: int}  — added_by must be a member of this chat
     """
-    err = await _require_admin(request)
-    if err is not None:
-        return err
     game: dict = request["game"]
     actor_id: int = request["user_id"]
     chat_id = request["chat_id"]
@@ -619,10 +596,7 @@ async def admin_add_guest(request: web.Request) -> web.Response:
 
 
 async def admin_remove_participant(request: web.Request) -> web.Response:
-    """Admin removes any participant (member or guest) from the game."""
-    err = await _require_admin(request)
-    if err is not None:
-        return err
+    """Remove any participant (member or guest) from the game."""
     game: dict = request["game"]
     try:
         pid = int(request.match_info["pid"])
@@ -652,9 +626,6 @@ async def admin_move_participant(request: web.Request) -> web.Response:
         waitlist via swap_with_waitlist. We pick the most-recently-confirmed
         person to bump.
     """
-    err = await _require_admin(request)
-    if err is not None:
-        return err
     game: dict = request["game"]
     actor_id: int = request["user_id"]
     try:
@@ -724,9 +695,6 @@ async def admin_patch_game(request: web.Request) -> web.Response:
       • notes              string up to 200 chars; pass "" or null to clear
       • payment_amount_cents  int >= 0; 0 or null to clear payment
     """
-    err = await _require_admin(request)
-    if err is not None:
-        return err
     game: dict = request["game"]
     try:
         body = await request.json()
@@ -805,9 +773,6 @@ async def admin_patch_game(request: web.Request) -> web.Response:
 
 async def admin_delete_game(request: web.Request) -> web.Response:
     """Delete the game and notify previously-confirmed members."""
-    err = await _require_admin(request)
-    if err is not None:
-        return err
     game: dict = request["game"]
     actor_id: int = request["user_id"]
     bot: Bot = request.app["bot"]
@@ -856,9 +821,6 @@ async def admin_delete_game(request: web.Request) -> web.Response:
 
 async def admin_pay_toggle(request: web.Request) -> web.Response:
     """Toggle the paid flag on a confirmed participant."""
-    err = await _require_admin(request)
-    if err is not None:
-        return err
     game: dict = request["game"]
     try:
         pid = int(request.match_info["pid"])

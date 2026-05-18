@@ -175,18 +175,18 @@ def game_card_keyboard(
             InlineKeyboardButton(reg_label, callback_data=f"miniapp_unavailable:{game_id}"),
         ])
 
-    # 2. Manage (admin-only — UI gating happens in the mini-app)
+    # 2. Manage — any chat member can open it.
     if bot_username:
         rows.append([
             InlineKeyboardButton(
-                "⚙ Manage (admin only)",
+                "⚙ Manage",
                 url=_miniapp_url(bot_username, MANAGE_APP_SHORT_NAME, game_id),
             ),
         ])
     else:
         rows.append([
             InlineKeyboardButton(
-                "⚙ Manage (admin only)",
+                "⚙ Manage",
                 callback_data=f"miniapp_unavailable:{game_id}",
             ),
         ])
