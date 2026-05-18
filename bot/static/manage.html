@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Manage · Pickleball</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #1a1a1a);
+    --hint: var(--tg-theme-hint-color, #888);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --button: var(--tg-theme-button-color, #2481cc);
+    --button-text: var(--tg-theme-button-text-color, #ffffff);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #f4f4f5);
+    --section-bg: var(--tg-theme-section-bg-color, #ffffff);
+    --section-sep: var(--tg-theme-section-separator-color, #e5e5e7);
+    --destructive: var(--tg-theme-destructive-text-color, #d33);
+    --accent: var(--tg-theme-accent-text-color, var(--link));
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--secondary-bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 12px 14px 32px; }
+
+  .card {
+    background: var(--section-bg);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: 13px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--hint);
+    margin: 0 0 10px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .card h2 .h2-action {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--accent);
+    cursor: pointer;
+  }
+
+  .game-title { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .game-sub  { color: var(--hint); font-size: 13px; }
+  .counts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .pill {
+    background: var(--secondary-bg);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--hint);
+  }
+  .pill b { color: var(--text); }
+
+  /* Participant rows
+     ─────────────────
+     Layout priority: show the full name on one line. If buttons can't
+     fit alongside it, the buttons wrap to a new line as a group rather
+     than the name truncating. */
+  .p-row {
+    display: flex;
+    align-items: center;
+    padding: 10px 0;
+    border-top: 1px solid var(--section-sep);
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .p-row:first-of-type { border-top: none; }
+  .p-info { flex: 1 1 auto; }
+  .p-name {
+    font-size: 15px;
+    white-space: nowrap;
+  }
+  .p-meta { color: var(--hint); font-size: 12px; }
+  .p-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+
+  /* Buttons */
+  .btn {
+    appearance: none;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    background: var(--secondary-bg);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .btn.primary { background: var(--button); color: var(--button-text); }
+  .btn.destructive { color: var(--destructive); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.large { padding: 12px 14px; font-size: 15px; flex: 1; }
+  .btn-row { display: flex; gap: 8px; margin-top: 10px; }
+
+  /* Edit form */
+  .field {
+    display: flex; flex-direction: column; gap: 4px;
+    margin-bottom: 12px;
+  }
+  .field label {
+    font-size: 12px; color: var(--hint);
+    text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;
+  }
+  .field input, .field textarea {
+    border: 1px solid var(--section-sep);
+    background: var(--secondary-bg);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font: inherit;
+    width: 100%;
+  }
+  .field input:focus, .field textarea:focus {
+    outline: 2px solid var(--button);
+    outline-offset: -1px;
+  }
+  .field textarea { resize: vertical; min-height: 60px; }
+  .field .help { font-size: 12px; color: var(--hint); }
+
+  /* Picker overlay */
+  .overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: none;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 50;
+  }
+  .overlay.open { display: flex; }
+  .sheet {
+    background: var(--section-bg);
+    border-radius: 16px 16px 0 0;
+    max-width: 640px;
+    width: 100%;
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 14px 16px 24px;
+  }
+  .sheet h3 {
+    font-size: 15px;
+    margin: 0 0 10px;
+  }
+  .picker-item {
+    padding: 12px 0;
+    border-top: 1px solid var(--section-sep);
+    cursor: pointer;
+  }
+  .picker-item:first-child { border-top: none; }
+  .picker-empty { padding: 16px 0; color: var(--hint); text-align: center; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: var(--text); color: var(--bg);
+    padding: 10px 16px; border-radius: 999px;
+    font-size: 13px; opacity: 0; pointer-events: none;
+    transition: opacity 0.2s; z-index: 99;
+  }
+  .toast.show { opacity: 0.92; }
+
+  .loading { text-align: center; color: var(--hint); padding: 40px 0; }
+  .error-banner {
+    background: rgba(255, 59, 48, 0.12); color: var(--destructive);
+    padding: 12px 14px; border-radius: 10px; margin-bottom: 12px; font-size: 14px;
+  }
+  .gate-card {
+    background: var(--section-bg);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+  }
+  .gate-card h1 { font-size: 18px; margin: 0 0 8px; }
+  .gate-card p { color: var(--hint); margin: 0; }
+</style>
+</head>
+<body>
+<div class="wrap" id="root">
+  <div class="loading">Loading…</div>
+</div>
+
+<!-- Member picker overlay -->
+<div class="overlay" id="member-picker">
+  <div class="sheet">
+    <h3>Add a member</h3>
+    <div id="member-picker-list"></div>
+    <div class="btn-row">
+      <button class="btn large" data-close-picker>Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+}
+
+function getGameId() {
+  const fromStart = tg?.initDataUnsafe?.start_param;
+  if (fromStart && /^\d+$/.test(fromStart)) return parseInt(fromStart, 10);
+  const url = new URL(window.location.href);
+  const q = url.searchParams.get("game_id");
+  if (q && /^\d+$/.test(q)) return parseInt(q, 10);
+  return null;
+}
+
+const GAME_ID = getGameId();
+const INIT_DATA = tg?.initData || "";
+
+let state = null;
+let pending = false;
+
+const root = document.getElementById("root");
+const toastEl = document.getElementById("toast");
+const memberPicker = document.getElementById("member-picker");
+const memberPickerList = document.getElementById("member-picker-list");
+
+function showToast(text, ms = 1800) {
+  toastEl.textContent = text;
+  toastEl.classList.add("show");
+  clearTimeout(toastEl._t);
+  toastEl._t = setTimeout(() => toastEl.classList.remove("show"), ms);
+}
+
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function apiCall(path, opts = {}) {
+  if (pending) return null;
+  pending = true;
+  try {
+    const headers = {
+      "X-Telegram-Init-Data": INIT_DATA,
+      "Content-Type": "application/json",
+      ...(opts.headers || {}),
+    };
+    const res = await fetch(path, { ...opts, headers });
+    let payload = null;
+    try { payload = await res.json(); } catch (e) {}
+    if (!res.ok) {
+      const msg = payload?.error || `HTTP ${res.status}`;
+      showToast(msg);
+      return { _error: msg, _status: res.status };
+    }
+    return payload;
+  } catch (e) {
+    showToast("Network error");
+    return null;
+  } finally {
+    pending = false;
+  }
+}
+
+function confirmAsync(question) {
+  return new Promise((resolve) => {
+    if (tg?.showConfirm) {
+      tg.showConfirm(question, (ok) => resolve(!!ok));
+    } else {
+      resolve(window.confirm(question));
+    }
+  });
+}
+
+function promptAsync(message, defaultValue) {
+  // Telegram doesn't have a native text prompt in WebApp; use window.prompt.
+  return Promise.resolve(window.prompt(message, defaultValue ?? ""));
+}
+
+// ─── Refresh ────────────────────────────────────────────────
+async function refresh() {
+  if (!GAME_ID) {
+    root.innerHTML = `<div class="error-banner">Missing game id — open this from the game card.</div>`;
+    return;
+  }
+  const data = await apiCall(`/api/game/${GAME_ID}`);
+  if (data && !data._error) {
+    state = data;
+    render();
+  } else if (data && data._status === 403) {
+    renderGate("This view is admin-only — ask a chat admin to manage the game.");
+  } else if (data && data._status === 404) {
+    renderGate("Game not found — it may have been deleted.");
+  }
+}
+
+function renderGate(msg) {
+  root.innerHTML = `
+    <div class="gate-card">
+      <h1>Manage</h1>
+      <p>${escapeHtml(msg)}</p>
+    </div>`;
+}
+
+// ─── Mutations ──────────────────────────────────────────────
+async function movePart(pid, newStatus) {
+  const data = await apiCall(`/api/game/${GAME_ID}/admin/move/${pid}`, {
+    method: "POST",
+    body: JSON.stringify({ status: newStatus }),
+  });
+  if (data && !data._error) { state = data; render(); showToast(`Moved to ${newStatus}.`); }
+}
+
+async function removePart(pid, name) {
+  const ok = await confirmAsync(`Remove ${name}?`);
+  if (!ok) return;
+  const data = await apiCall(`/api/game/${GAME_ID}/admin/participant/${pid}`, {
+    method: "DELETE",
+  });
+  if (data && !data._error) { state = data; render(); showToast("Removed."); }
+}
+
+async function togglePaid(pid) {
+  const data = await apiCall(`/api/game/${GAME_ID}/admin/pay_toggle/${pid}`, {
+    method: "POST",
+  });
+  if (data && !data._error) { state = data; render(); }
+}
+
+async function addMember(memberId) {
+  const data = await apiCall(`/api/game/${GAME_ID}/admin/add_member`, {
+    method: "POST",
+    body: JSON.stringify({ member_id: memberId }),
+  });
+  if (data && !data._error) { state = data; render(); showToast("Added."); closeMemberPicker(); }
+}
+
+async function addGuestAsAdmin() {
+  const name = await promptAsync("Guest name?");
+  if (!name) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  if (trimmed.length > 40) { showToast("Name too long."); return; }
+  const data = await apiCall(`/api/game/${GAME_ID}/admin/add_guest`, {
+    method: "POST",
+    body: JSON.stringify({ name: trimmed }),
+  });
+  if (data && !data._error) { state = data; render(); showToast(`Added ${trimmed}.`); }
+}
+
+async function patchGame(patch, successMsg) {
+  const data = await apiCall(`/api/game/${GAME_ID}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+  if (data && !data._error) { state = data; render(); showToast(successMsg || "Saved."); }
+}
+
+async function deleteGame() {
+  const ok = await confirmAsync("Delete this game? Everyone signed up will be notified.");
+  if (!ok) return;
+  const data = await apiCall(`/api/game/${GAME_ID}`, { method: "DELETE" });
+  if (data && data.deleted) {
+    root.innerHTML = `
+      <div class="gate-card">
+        <h1>Deleted</h1>
+        <p>Game removed. You can close this window.</p>
+      </div>`;
+    showToast("Game deleted.");
+    setTimeout(() => { tg?.close(); }, 1200);
+  }
+}
+
+// ─── Member picker (overlay) ────────────────────────────────
+function openMemberPicker() {
+  const list = state?.available_members || [];
+  if (!list.length) {
+    memberPickerList.innerHTML = `<div class="picker-empty">Nobody to add — everyone in this chat is already on the roster.<br><br><i>The bot only sees members who've sent a message or tapped a button. Use "Add guest" for someone the bot hasn't seen yet.</i></div>`;
+  } else {
+    memberPickerList.innerHTML = list.map((m) => {
+      return `<div class="picker-item" data-member-id="${m.telegram_id}">${escapeHtml(m.display_name)}</div>`;
+    }).join("");
+  }
+  memberPicker.classList.add("open");
+}
+function closeMemberPicker() { memberPicker.classList.remove("open"); }
+
+memberPicker.addEventListener("click", (ev) => {
+  if (ev.target.matches("[data-close-picker]") || ev.target === memberPicker) {
+    closeMemberPicker();
+    return;
+  }
+  const item = ev.target.closest("[data-member-id]");
+  if (item) {
+    addMember(parseInt(item.dataset.memberId, 10));
+  }
+});
+
+// ─── Renderers ──────────────────────────────────────────────
+function renderHeader(game, counts) {
+  const payLine = game.has_payment
+    ? `<span class="pill">💰 <b>${escapeHtml(game.payment_amount_label)}</b> · paid <b>${counts.paid}/${counts.confirmed}</b></span>`
+    : "";
+  return `
+    <div class="card">
+      <div class="game-title">🎾 ${escapeHtml(game.scheduled_for_label)}</div>
+      <div class="game-sub">📍 ${escapeHtml(game.location)}</div>
+      <div class="counts">
+        <span class="pill">Confirmed <b>${counts.confirmed}/${game.max_players}</b></span>
+        <span class="pill">Waitlist <b>${counts.waitlist}</b></span>
+        ${payLine}
+      </div>
+    </div>`;
+}
+
+function partRow(p, hasPayment, slot) {
+  const isMember = p.kind === "member";
+  const subtitle = isMember
+    ? (p.adder_name && p.adder_name !== p.name ? `added by ${escapeHtml(p.adder_name)}` : "")
+    : `guest of ${escapeHtml(p.adder_name || "?")}`;
+  const paidBadge = hasPayment && slot === "confirmed"
+    ? (p.is_paid ? `<button class="btn" data-pay="${p.id}">✅ Paid</button>` : `<button class="btn" data-pay="${p.id}">⬜ Unpaid</button>`)
+    : "";
+
+  // Move/remove buttons depending on current status
+  const moveButtons = [];
+  if (slot !== "confirmed") moveButtons.push(`<button class="btn" data-move="${p.id}:confirmed">→ Confirmed</button>`);
+  if (slot !== "waitlist")  moveButtons.push(`<button class="btn" data-move="${p.id}:waitlist">→ Waitlist</button>`);
+
+  return `
+    <div class="p-row">
+      <div class="p-info">
+        <div class="p-name">${escapeHtml(p.name)}</div>
+        ${subtitle ? `<div class="p-meta">${subtitle}</div>` : ""}
+      </div>
+      <div class="p-actions">
+        ${paidBadge}
+        ${moveButtons.join("")}
+        <button class="btn destructive" data-remove="${p.id}" data-remove-name="${escapeHtml(p.name)}">✗ Remove</button>
+      </div>
+    </div>`;
+}
+
+function renderParticipants(participants, hasPayment) {
+  function section(title, list, slot, numbered) {
+    if (!list.length) {
+      return `
+        <div class="card">
+          <h2>${title} (0)</h2>
+          <div class="game-sub">Nobody yet.</div>
+        </div>`;
+    }
+    return `
+      <div class="card">
+        <h2>${title} (${list.length})</h2>
+        ${list.map((p) => partRow(p, hasPayment, slot)).join("")}
+      </div>`;
+  }
+  return `
+    ${section("Confirmed", participants.confirmed, "confirmed", false)}
+    ${section("Waitlist", participants.waitlist, "waitlist", true)}
+  `;
+}
+
+function renderAddCard() {
+  return `
+    <div class="card">
+      <h2>Add to game</h2>
+      <div class="btn-row">
+        <button class="btn primary large" data-open-member-picker>+ Add member</button>
+        <button class="btn large" data-add-guest>+ Add guest</button>
+      </div>
+    </div>`;
+}
+
+function renderEditCard(game) {
+  // Format scheduled_for for the datetime-local input. The ISO string we
+  // store includes timezone info; a datetime-local input wants
+  // `YYYY-MM-DDTHH:MM` in local-naive form. We trim the offset and the
+  // seconds component for the input field; on save we re-attach the
+  // bot's TZ on the server.
+  const iso = game.scheduled_for || "";
+  // Strip trailing seconds / fractional seconds / timezone for the input.
+  const m = iso.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  const dtVal = m ? `${m[1]}T${m[2]}` : "";
+
+  return `
+    <div class="card">
+      <h2>Game details</h2>
+      <div class="field">
+        <label for="f-time">Date & start time</label>
+        <input type="datetime-local" id="f-time" value="${dtVal}" />
+        <div class="help">Saves when you tap Save below.</div>
+      </div>
+      <div class="field">
+        <label for="f-loc">Location</label>
+        <input type="text" id="f-loc" value="${escapeHtml(game.location || "")}" maxlength="100" />
+      </div>
+      <div class="field">
+        <label for="f-max">Max players</label>
+        <input type="number" id="f-max" min="2" max="32" value="${game.max_players}" />
+      </div>
+      <div class="field">
+        <label for="f-notes">Notes</label>
+        <textarea id="f-notes" maxlength="200" placeholder="(optional)">${escapeHtml(game.notes || "")}</textarea>
+        <div class="help">Leave blank to clear.</div>
+      </div>
+      <div class="field">
+        <label for="f-pay">Payment per person (cents)</label>
+        <input type="number" id="f-pay" min="0" value="${game.payment_amount_cents ?? 0}" />
+        <div class="help">0 clears the payment. 500 = $5.00.</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary large" id="save-game">Save changes</button>
+      </div>
+    </div>`;
+}
+
+function renderDangerZone() {
+  return `
+    <div class="card">
+      <h2>Danger zone</h2>
+      <div class="btn-row">
+        <button class="btn destructive large" id="delete-game">🗑 Delete game</button>
+      </div>
+    </div>`;
+}
+
+function render() {
+  if (!state) return;
+  const { game, viewer, counts, participants } = state;
+
+  if (!viewer.is_admin) {
+    renderGate("This view is admin-only — ask a chat admin to manage the game.");
+    return;
+  }
+
+  root.innerHTML = `
+    ${renderHeader(game, counts)}
+    ${renderAddCard()}
+    ${renderParticipants(participants, game.has_payment)}
+    ${renderEditCard(game)}
+    ${renderDangerZone()}
+  `;
+
+  // Bind move buttons
+  root.querySelectorAll("[data-move]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const [pid, status] = el.dataset.move.split(":");
+      movePart(parseInt(pid, 10), status);
+    });
+  });
+
+  // Bind remove buttons
+  root.querySelectorAll("[data-remove]").forEach((el) => {
+    el.addEventListener("click", () => {
+      removePart(parseInt(el.dataset.remove, 10), el.dataset.removeName);
+    });
+  });
+
+  // Bind pay-toggle buttons
+  root.querySelectorAll("[data-pay]").forEach((el) => {
+    el.addEventListener("click", () => togglePaid(parseInt(el.dataset.pay, 10)));
+  });
+
+  // Bind add buttons
+  root.querySelector("[data-open-member-picker]")?.addEventListener("click", openMemberPicker);
+  root.querySelector("[data-add-guest]")?.addEventListener("click", addGuestAsAdmin);
+
+  // Edit form save
+  document.getElementById("save-game").addEventListener("click", saveGame);
+  // Delete
+  document.getElementById("delete-game").addEventListener("click", deleteGame);
+}
+
+function saveGame() {
+  const time = document.getElementById("f-time").value;
+  const loc = document.getElementById("f-loc").value.trim();
+  const max = parseInt(document.getElementById("f-max").value, 10);
+  const notes = document.getElementById("f-notes").value;
+  const pay = parseInt(document.getElementById("f-pay").value, 10);
+
+  const patch = {};
+  // Only include fields the admin actually intended to set. The datetime
+  // input is `YYYY-MM-DDTHH:MM` (no seconds/tz). The server will attach
+  // the bot's configured TZ when it parses.
+  if (time) patch.scheduled_for = time;
+  if (loc) patch.location = loc;
+  if (!Number.isNaN(max)) patch.max_players = max;
+  // Notes can be cleared by submitting empty — send "" so the server clears.
+  patch.notes = notes;
+  if (!Number.isNaN(pay)) patch.payment_amount_cents = pay;
+
+  patchGame(patch, "Saved.");
+}
+
+refresh();
+</script>
+</body>
+</html>

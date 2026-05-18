@@ -115,7 +115,7 @@ Key functions:
 - `game_has_payment(game)` — guard for paid-flag UI
 - `participant_display(p, show_paid=False)` — name + paid badge
 - `render_game_card(game, participants, tz, organizer_name)` — main card body
-- `game_card_keyboard(game_id, viewer_in_game, game_full, has_payment)` — buttons under a card
+- `game_card_keyboard(game_id, bot_username, viewer_registered, has_payment)` — buttons under a card (Register/Update Registration + Manage are Mini App deep links; Paid + Refresh are callback buttons)
 - `render_game_list_header`, `game_list_keyboard` — for `/games` etc.
 - Manage view rendering helpers
 

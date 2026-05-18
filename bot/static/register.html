@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Register · Pickleball</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  /* Telegram theme variables come from window.Telegram.WebApp.themeParams
+     and are exposed automatically as CSS vars on :root. We fall back to
+     reasonable light-mode defaults for desktop testing outside Telegram. */
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #1a1a1a);
+    --hint: var(--tg-theme-hint-color, #888);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --button: var(--tg-theme-button-color, #2481cc);
+    --button-text: var(--tg-theme-button-text-color, #ffffff);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #f4f4f5);
+    --section-bg: var(--tg-theme-section-bg-color, #ffffff);
+    --section-sep: var(--tg-theme-section-separator-color, #e5e5e7);
+    --destructive: var(--tg-theme-destructive-text-color, #d33);
+    --accent: var(--tg-theme-accent-text-color, var(--link));
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--secondary-bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 12px 14px 32px;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--section-bg);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--hint);
+    margin: 0 0 10px;
+  }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row + .row { margin-top: 6px; }
+
+  /* Header card */
+  .game-title { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .game-sub  { color: var(--hint); font-size: 13px; margin-bottom: 2px; }
+  .game-pay  { font-weight: 600; margin-top: 4px; }
+  .game-notes {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: var(--secondary-bg);
+    border-radius: 8px;
+    font-size: 13px;
+    white-space: pre-wrap;
+  }
+  .counts {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: var(--secondary-bg);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--hint);
+  }
+  .pill b { color: var(--text); }
+
+  /* Status banner */
+  .status-banner {
+    padding: 12px 14px;
+    border-radius: 10px;
+    margin-bottom: 12px;
+    font-weight: 500;
+    background: var(--secondary-bg);
+  }
+  .status-banner.confirmed { background: rgba(52, 199, 89, 0.12); }
+  .status-banner.waitlist { background: rgba(0, 122, 255, 0.10); }
+  .status-banner.none     { background: var(--secondary-bg); color: var(--hint); }
+
+  /* Buttons */
+  .btn {
+    appearance: none;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 15px;
+    font-weight: 500;
+    background: var(--button);
+    color: var(--button-text);
+    cursor: pointer;
+    flex: 1;
+    transition: opacity 0.15s;
+  }
+  .btn:active { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.secondary {
+    background: var(--secondary-bg);
+    color: var(--text);
+  }
+  .btn.destructive {
+    background: var(--secondary-bg);
+    color: var(--destructive);
+  }
+  .btn-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  /* Guest list */
+  .guest-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-top: 1px solid var(--section-sep);
+  }
+  .guest-item:first-child { border-top: none; }
+  .guest-meta { color: var(--hint); font-size: 12px; }
+  .guest-remove {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--destructive);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 6px 8px;
+  }
+  .add-guest {
+    display: flex; gap: 8px; margin-top: 10px;
+  }
+  .add-guest input {
+    flex: 1;
+    border: 1px solid var(--section-sep);
+    background: var(--secondary-bg);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 15px;
+  }
+  .add-guest input:focus { outline: 2px solid var(--button); outline-offset: -1px; }
+
+  /* Roster (read-only) */
+  .roster-section + .roster-section { margin-top: 12px; }
+  .roster-title {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--hint); margin-bottom: 6px;
+  }
+  .roster-item {
+    padding: 6px 0;
+    font-size: 14px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .roster-item .pos { color: var(--hint); width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
+  .roster-item.paid::before { content: "✅ "; }
+  .roster-item.unpaid::before { content: "⬜ "; }
+  .guest-suffix { color: var(--hint); font-size: 12px; }
+
+  /* Toast / banners */
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: var(--text); color: var(--bg);
+    padding: 10px 16px; border-radius: 999px;
+    font-size: 13px; opacity: 0; pointer-events: none;
+    transition: opacity 0.2s;
+    z-index: 99;
+  }
+  .toast.show { opacity: 0.92; }
+
+  /* Loading */
+  .loading {
+    text-align: center;
+    color: var(--hint);
+    padding: 40px 0;
+  }
+  .error-banner {
+    background: rgba(255, 59, 48, 0.12);
+    color: var(--destructive);
+    padding: 12px 14px;
+    border-radius: 10px;
+    margin-bottom: 12px;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="root">
+  <div class="loading">Loading…</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+}
+
+// Pull game_id from the start_param Telegram passes when launching via
+// `t.me/<bot>/<app>?startapp=<param>` or the inline web_app URL's query.
+function getGameId() {
+  const fromStart = tg?.initDataUnsafe?.start_param;
+  if (fromStart && /^\d+$/.test(fromStart)) return parseInt(fromStart, 10);
+  const url = new URL(window.location.href);
+  const q = url.searchParams.get("game_id");
+  if (q && /^\d+$/.test(q)) return parseInt(q, 10);
+  return null;
+}
+
+const GAME_ID = getGameId();
+const INIT_DATA = tg?.initData || "";
+
+let state = null;        // last fetched state payload
+let pending = false;     // single-flight: never overlap two API calls
+
+const root = document.getElementById("root");
+const toastEl = document.getElementById("toast");
+
+function showToast(text, ms = 1800) {
+  toastEl.textContent = text;
+  toastEl.classList.add("show");
+  clearTimeout(toastEl._t);
+  toastEl._t = setTimeout(() => toastEl.classList.remove("show"), ms);
+}
+
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function apiCall(path, opts = {}) {
+  if (pending) return null;
+  pending = true;
+  try {
+    const headers = {
+      "X-Telegram-Init-Data": INIT_DATA,
+      "Content-Type": "application/json",
+      ...(opts.headers || {}),
+    };
+    const res = await fetch(path, { ...opts, headers });
+    let payload = null;
+    try { payload = await res.json(); } catch (e) {}
+    if (!res.ok) {
+      const msg = payload?.error || `HTTP ${res.status}`;
+      showToast(msg);
+      return null;
+    }
+    return payload;
+  } catch (e) {
+    showToast("Network error");
+    return null;
+  } finally {
+    pending = false;
+  }
+}
+
+async function refresh() {
+  if (!GAME_ID) {
+    root.innerHTML = `<div class="error-banner">Missing game id — open this from the game card in your group.</div>`;
+    return;
+  }
+  const data = await apiCall(`/api/game/${GAME_ID}`);
+  if (data) {
+    state = data;
+    render();
+  }
+}
+
+async function setRegistration(action) {
+  const data = await apiCall(`/api/game/${GAME_ID}/register`, {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  });
+  if (data) {
+    state = data;
+    render();
+    const msgs = {
+      join: "You're in.",
+      leave: "Left the game.",
+    };
+    showToast(msgs[action] || "Updated.");
+  }
+}
+
+async function addGuest(name) {
+  const data = await apiCall(`/api/game/${GAME_ID}/guest`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  if (data) {
+    state = data;
+    render();
+    showToast(`Added ${name}.`);
+  }
+}
+
+async function removeGuest(pid, name) {
+  const ok = await confirmAsync(`Remove ${name}?`);
+  if (!ok) return;
+  const data = await apiCall(`/api/game/${GAME_ID}/guest/${pid}`, {
+    method: "DELETE",
+  });
+  if (data) {
+    state = data;
+    render();
+    showToast("Removed.");
+  }
+}
+
+function confirmAsync(question) {
+  return new Promise((resolve) => {
+    if (tg?.showConfirm) {
+      tg.showConfirm(question, (ok) => resolve(!!ok));
+    } else {
+      resolve(window.confirm(question));
+    }
+  });
+}
+
+function renderHeader(game, counts) {
+  const payLine = game.has_payment
+    ? `<div class="game-pay">💰 ${escapeHtml(game.payment_amount_label)} per person</div>`
+    : "";
+  const notesLine = game.notes
+    ? `<div class="game-notes">📝 ${escapeHtml(game.notes)}</div>`
+    : "";
+  const paidPill = game.has_payment
+    ? `<span class="pill">Paid <b>${counts.paid}/${counts.confirmed}</b></span>`
+    : "";
+  return `
+    <div class="card">
+      <div class="game-title">🎾 ${escapeHtml(game.scheduled_for_label)}</div>
+      <div class="game-sub">📍 ${escapeHtml(game.location)}</div>
+      <div class="game-sub"><i>Organized by ${escapeHtml(game.organizer_name)}</i></div>
+      ${payLine}
+      ${notesLine}
+      <div class="counts">
+        <span class="pill">Confirmed <b>${counts.confirmed}/${game.max_players}</b></span>
+        ${counts.waitlist ? `<span class="pill">Waitlist <b>${counts.waitlist}</b></span>` : ""}
+        ${paidPill}
+      </div>
+    </div>`;
+}
+
+function renderRegistrationCard(viewer, game, counts) {
+  const reg = viewer.registration;
+  const full = counts.confirmed >= game.max_players;
+  const joinLabel = full ? "⏳ Join Waitlist" : "✓ Join";
+
+  let bannerHtml = "";
+  let actionsHtml = "";
+
+  if (!reg) {
+    bannerHtml = `<div class="status-banner none">You're not signed up yet.</div>`;
+    actionsHtml = `
+      <div class="btn-row">
+        <button class="btn" data-action="join">${joinLabel}</button>
+      </div>`;
+  } else if (reg.status === "confirmed") {
+    bannerHtml = `<div class="status-banner confirmed">✓ You're <b>CONFIRMED</b> · position ${reg.position}</div>`;
+    actionsHtml = `
+      <div class="btn-row">
+        <button class="btn destructive" data-action="leave">✗ Leave</button>
+      </div>`;
+  } else if (reg.status === "waitlist") {
+    bannerHtml = `<div class="status-banner waitlist">⏳ You're on the <b>WAITLIST</b> at #${reg.position}</div>`;
+    actionsHtml = `
+      <div class="btn-row">
+        <button class="btn destructive" data-action="leave">✗ Leave</button>
+      </div>`;
+  }
+
+  return `
+    <div class="card">
+      <h2>Your registration</h2>
+      ${bannerHtml}
+      ${actionsHtml}
+    </div>`;
+}
+
+function renderGuestsCard(viewer) {
+  const guests = viewer.guests || [];
+  let listHtml = "";
+  if (guests.length === 0) {
+    listHtml = `<div class="game-sub">You haven't added any guests.</div>`;
+  } else {
+    listHtml = guests.map((g) => {
+      const status = g.status === "confirmed" ? "confirmed"
+        : g.status === "waitlist" ? `waitlist #${g.position}`
+        : g.status;
+      return `
+        <div class="guest-item">
+          <div>
+            <div>${escapeHtml(g.name)}</div>
+            <div class="guest-meta">${status}</div>
+          </div>
+          <button class="guest-remove" data-guest-remove="${g.id}" data-guest-name="${escapeHtml(g.name)}">Remove</button>
+        </div>`;
+    }).join("");
+  }
+
+  return `
+    <div class="card">
+      <h2>Your guests</h2>
+      ${listHtml}
+      <form class="add-guest" id="add-guest-form">
+        <input type="text" id="guest-name" name="guest-name" placeholder="Guest name" maxlength="40" autocomplete="off" />
+        <button type="submit" class="btn">Add</button>
+      </form>
+    </div>`;
+}
+
+function renderRosterCard(participants, game) {
+  function group(list, label, numbered) {
+    if (!list.length) return "";
+    const items = list.map((p, idx) => {
+      const isMember = p.kind === "member";
+      const suffix = isMember ? "" : `<span class="guest-suffix"> (guest of ${escapeHtml(p.adder_name || "?")})</span>`;
+      const cls = game.has_payment && label === "Confirmed"
+        ? (p.is_paid ? "roster-item paid" : "roster-item unpaid")
+        : "roster-item";
+      const num = numbered ? `<span class="pos">${idx + 1}.</span>` : `<span class="pos">•</span>`;
+      return `<div class="${cls}">${num}<span>${escapeHtml(p.name)}${suffix}</span></div>`;
+    }).join("");
+    return `
+      <div class="roster-section">
+        <div class="roster-title">${label} (${list.length})</div>
+        ${items}
+      </div>`;
+  }
+  const c = group(participants.confirmed, "Confirmed", false);
+  const w = group(participants.waitlist, "Waitlist", true);
+  return `
+    <div class="card">
+      <h2>Full roster</h2>
+      ${c || `<div class="game-sub">Nobody confirmed yet.</div>`}
+      ${w}
+    </div>`;
+}
+
+function render() {
+  if (!state) return;
+  const { game, viewer, counts, participants } = state;
+  root.innerHTML = `
+    ${renderHeader(game, counts)}
+    ${renderRegistrationCard(viewer, game, counts)}
+    ${renderGuestsCard(viewer)}
+    ${renderRosterCard(participants, game)}
+  `;
+
+  // Bind registration action buttons
+  root.querySelectorAll("[data-action]").forEach((el) => {
+    el.addEventListener("click", () => setRegistration(el.dataset.action));
+  });
+  // Bind guest remove buttons
+  root.querySelectorAll("[data-guest-remove]").forEach((el) => {
+    el.addEventListener("click", () => {
+      removeGuest(parseInt(el.dataset.guestRemove, 10), el.dataset.guestName);
+    });
+  });
+  // Bind add-guest form
+  const form = document.getElementById("add-guest-form");
+  if (form) {
+    form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById("guest-name");
+      const name = (input.value || "").trim();
+      if (!name) return;
+      if (name.length > 40) {
+        showToast("Name too long (40 char max).");
+        return;
+      }
+      input.value = "";
+      addGuest(name);
+    });
+  }
+}
+
+refresh();
+</script>
+</body>
+</html>

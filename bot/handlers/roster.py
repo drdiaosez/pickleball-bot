@@ -45,8 +45,53 @@ log = logging.getLogger(__name__)
 
 # ─────────────────────── card posting & refresh ─────────────────────── #
 
+async def refresh_card_in_chat(bot, bot_data: dict, game_id: int) -> None:
+    """Re-render a game card in its owning chat, outside any callback context.
+
+    Called by the HTTP server after a mini-app mutation. Uses bot.edit_message_text
+    on the canonical (chat_id, message_id) recorded for the game. Silent if the
+    game isn't anchored to a chat yet, or if the edit fails (the API write that
+    triggered this already succeeded — refresh is best-effort).
+    """
+    game = db.get_game(game_id)
+    if not game or not game.get("chat_id") or not game.get("message_id"):
+        return
+    tz = bot_data["tz"]
+    participants = db.get_participants(game_id)
+    organizer = db.get_member(game["organizer_id"])
+    org_name = organizer["display_name"] if organizer else "?"
+
+    text = views.render_game_card(game, participants, tz, org_name)
+    kb = views.game_card_keyboard(
+        game_id,
+        bot_username=bot_data.get("bot_username"),
+        viewer_registered=False,  # group card is multi-viewer; refresh per-viewer happens on tap
+        has_payment=views.game_has_payment(game),
+    )
+    try:
+        await bot.edit_message_text(
+            chat_id=game["chat_id"],
+            message_id=game["message_id"],
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb,
+        )
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            log.info("refresh_card_in_chat edit failed: %s", e)
+    except Exception as e:
+        log.info("refresh_card_in_chat exception: %s", e)
+
+
 async def post_game_card(context: ContextTypes.DEFAULT_TYPE, chat_id: int, game_id: int) -> None:
-    """Send a fresh game card and remember its message_id."""
+    """Send a fresh game card and remember its message_id.
+
+    The card uses WebApp buttons for Register and Manage. Both buttons use
+    the same label for everyone (we can't render per-user labels into a
+    group message); the per-viewer "Register" vs "Update Registration"
+    label kicks in when a viewer taps Refresh, which re-renders in place
+    via render_card_in_place().
+    """
     tz = context.bot_data["tz"]
     game = db.get_game(game_id)
     if not game:
@@ -56,11 +101,10 @@ async def post_game_card(context: ContextTypes.DEFAULT_TYPE, chat_id: int, game_
     org_name = organizer["display_name"] if organizer else "?"
 
     text = views.render_game_card(game, participants, tz, org_name)
-    confirmed = sum(1 for p in participants if p["status"] == "confirmed")
     kb = views.game_card_keyboard(
         game_id,
-        viewer_in_game=None,  # generic — buttons re-render per viewer via refresh
-        game_full=confirmed >= game["max_players"],
+        bot_username=context.bot_data.get("bot_username"),
+        viewer_registered=False,  # generic — re-renders per viewer on refresh
         has_payment=views.game_has_payment(game),
     )
 
@@ -76,7 +120,12 @@ async def render_card_in_place(
     game_id: int,
     viewer_user_id: int,
 ) -> None:
-    """Edit an existing card message with current state."""
+    """Edit an existing card message with current state.
+
+    Computes the per-viewer "Register" vs "Update Registration" label by
+    looking at whether the viewer is currently on the roster (any status)
+    OR has added at least one guest to the game.
+    """
     tz = context.bot_data["tz"]
     game = db.get_game(game_id)
     if not game:
@@ -85,18 +134,20 @@ async def render_card_in_place(
     organizer = db.get_member(game["organizer_id"])
     org_name = organizer["display_name"] if organizer else "?"
 
-    viewer_state = None
+    viewer_registered = False
     for p in participants:
-        if p["member_id"] == viewer_user_id:
-            viewer_state = p["status"]
+        if p.get("member_id") == viewer_user_id:
+            viewer_registered = True
+            break
+        if p.get("member_id") is None and p.get("added_by") == viewer_user_id:
+            viewer_registered = True
             break
 
     text = views.render_game_card(game, participants, tz, org_name)
-    confirmed = sum(1 for p in participants if p["status"] == "confirmed")
     kb = views.game_card_keyboard(
         game_id,
-        viewer_in_game=viewer_state,
-        game_full=confirmed >= game["max_players"],
+        bot_username=context.bot_data.get("bot_username"),
+        viewer_registered=viewer_registered,
         has_payment=views.game_has_payment(game),
     )
 
@@ -241,6 +292,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         elif action == "delete_no":
             await render_manage_in_place(context, update, int(args[0]))
 
+        elif action == "miniapp_unavailable":
+            # Tapped a Register/Manage button when bot_username wasn't
+            # resolvable at startup. Shouldn't normally happen.
+            await query.answer(
+                "Mini-app isn't deployed yet — bot username not resolved.",
+                show_alert=True,
+            )
+
         else:
             log.warning("Unknown callback action: %s", action)
 
@@ -267,18 +326,20 @@ async def _open_card(
     organizer = db.get_member(game["organizer_id"])
     org_name = organizer["display_name"] if organizer else "?"
 
-    viewer_state = None
+    viewer_registered = False
     for p in participants:
-        if p["member_id"] == viewer_id:
-            viewer_state = p["status"]
+        if p.get("member_id") == viewer_id:
+            viewer_registered = True
+            break
+        if p.get("member_id") is None and p.get("added_by") == viewer_id:
+            viewer_registered = True
             break
 
     text = views.render_game_card(game, participants, tz, org_name)
-    confirmed = sum(1 for p in participants if p["status"] == "confirmed")
     kb = views.game_card_keyboard(
         game_id,
-        viewer_in_game=viewer_state,
-        game_full=confirmed >= game["max_players"],
+        bot_username=context.bot_data.get("bot_username"),
+        viewer_registered=viewer_registered,
         has_payment=views.game_has_payment(game),
     )
     msg = await update.callback_query.message.reply_html(text, reply_markup=kb)

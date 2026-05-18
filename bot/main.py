@@ -7,7 +7,8 @@ Reads from .env:
   DB_PATH           — defaults to db.sqlite
   TIMEZONE          — IANA name, defaults to America/Los_Angeles
   ALLOWED_GROUP_ID  — optional; locks bot to one group
-  PUBLIC_URL        — required for /moneyball; e.g. https://pickle.example.com
+  PUBLIC_URL        — HTTPS origin where /register, /manage, /moneyball
+                       are served (e.g. https://pickle.example.com)
   HTTP_HOST         — defaults to 127.0.0.1
   HTTP_PORT         — defaults to 8080
 """
@@ -41,14 +42,23 @@ async def amain() -> None:
         raise SystemExit("BOT_TOKEN is required (put it in .env)")
     db_path = os.environ.get("DB_PATH", "db.sqlite")
     tz_name = os.environ.get("TIMEZONE", "America/Los_Angeles")
+    public_url = os.environ.get("PUBLIC_URL", "").strip() or None
     http_host = os.environ.get("HTTP_HOST", "127.0.0.1")
     http_port = int(os.environ.get("HTTP_PORT", "8080"))
+
+    if not public_url:
+        log.warning(
+            "PUBLIC_URL is not set — the HTTP server will still start on "
+            "HTTP_HOST:HTTP_PORT but you'll need to point a reverse proxy "
+            "at it before the mini-apps can be reached from Telegram."
+        )
 
     db.init_db(db_path)
     moneyball.init_moneyball_schema()
 
     app = Application.builder().token(token).build()
-    app.bot_data["tz"] = ZoneInfo(tz_name)
+    tz = ZoneInfo(tz_name)
+    app.bot_data["tz"] = tz
 
     # /start, /help
     app.add_handler(CommandHandler("start", common.cmd_start))
@@ -98,12 +108,39 @@ async def amain() -> None:
         return g.get("chat_id") if g else None
 
     completion_cb = mb_handlers.schedule_completion_announcement(app, chat_id_for_game)
-    http_app = http_server.create_app(bot_token=token, completion_callback=completion_cb)
+
+    async def refresh_card_cb(game_id: int) -> None:
+        # Called from the HTTP server after every mutating mini-app call
+        # on a game. Re-renders the canonical group-card message so the
+        # chat stays in sync with the mini-app's view.
+        await roster.refresh_card_in_chat(app.bot, app.bot_data, game_id)
+
+    http_app = http_server.create_app(
+        bot=app.bot,
+        bot_token=token,
+        tz=tz,
+        completion_callback=completion_cb,
+        refresh_card=refresh_card_cb,
+    )
 
     # ─── Boot ───
     log.info("Bot starting…")
     await app.initialize()
     await app.start()
+
+    # Fetch the bot's @username once at startup; we need it to build the
+    # `t.me/<bot>/<app>?startapp=<id>` deep links the new card keyboard uses.
+    # Cached in bot_data so view-layer code can read it without an API call.
+    try:
+        me = await app.bot.get_me()
+        app.bot_data["bot_username"] = me.username
+        log.info("Bot username resolved: @%s", me.username)
+    except Exception as e:
+        log.warning(
+            "Couldn't fetch bot username at startup (%s). Mini-app deep "
+            "links will fall back to an error message until restart.", e,
+        )
+
     await app.updater.start_polling(
         allowed_updates=["message", "callback_query", "my_chat_member", "chat_member"]
     )
