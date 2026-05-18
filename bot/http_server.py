@@ -174,6 +174,16 @@ async def auth_middleware(request: web.Request, handler):
         request["game"] = game
         request["chat_id"] = chat_id
 
+    # For chat-scoped routes (newgame mini-app), decode and validate.
+    enc_chat_id = request.match_info.get("enc_chat_id")
+    if enc_chat_id is not None:
+        chat_id = views.decode_chat_id(enc_chat_id)
+        if chat_id is None:
+            return web.json_response({"error": "bad chat id"}, status=400)
+        if db.get_chat_member(chat_id, user_id) is None:
+            return web.json_response({"error": "not a member of this chat"}, status=403)
+        request["chat_id"] = chat_id
+
     request["user_id"] = user_id
     return await handler(request)
 
@@ -836,6 +846,131 @@ async def admin_pay_toggle(request: web.Request) -> web.Response:
 
 
 # ─────────────────────────────────────────────
+# New-game routes (chat-scoped)
+# ─────────────────────────────────────────────
+
+async def get_newgame_context(request: web.Request) -> web.Response:
+    """Return the form-prep data for the newgame mini-app.
+
+    Currently just the recent locations for the chat, which the form
+    surfaces as quick-pick chips. Also echoes the chat title so the
+    page can display "Schedule a game in <chat>" without an extra
+    API call.
+    """
+    chat_id: int = request["chat_id"]
+    chat = db.get_chat(chat_id)
+    return web.json_response({
+        "chat": {
+            "id": chat_id,
+            "title": (chat or {}).get("title") or "this chat",
+        },
+        "recent_locations": db.list_recent_locations(chat_id, limit=5),
+    })
+
+
+async def post_newgame(request: web.Request) -> web.Response:
+    """Create a new game in the given chat.
+
+    body: {
+      "scheduled_for": ISO datetime (no tz → bot tz is applied),
+      "location": str,
+      "max_players": int (2..32, default 4),
+      "payment_amount_cents": int|null,
+      "notes": str|null,
+    }
+
+    Auth: caller must be a member of the chat (enforced by middleware).
+    On success, posts a fresh game card into the chat and returns the
+    new game id.
+    """
+    from datetime import datetime, timedelta
+
+    chat_id: int = request["chat_id"]
+    user_id: int = request["user_id"]
+    tz: ZoneInfo = request.app["tz"]
+    bot: Bot = request.app["bot"]
+
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        return web.json_response({"error": "bad json"}, status=400)
+
+    # scheduled_for — required.
+    raw_when = body.get("scheduled_for")
+    if not raw_when:
+        return web.json_response({"error": "scheduled_for required"}, status=400)
+    try:
+        dt = datetime.fromisoformat(str(raw_when))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=tz)
+    except (TypeError, ValueError):
+        return web.json_response({"error": "bad scheduled_for"}, status=400)
+    if dt < datetime.now(tz) - timedelta(minutes=10):
+        return web.json_response({"error": "time is in the past"}, status=400)
+
+    # location — required.
+    location = str(body.get("location") or "").strip()
+    if not location or len(location) > 100:
+        return web.json_response({"error": "location 1-100 chars"}, status=400)
+
+    # max_players — default 4.
+    raw_max = body.get("max_players", 4)
+    try:
+        max_players = int(raw_max)
+    except (TypeError, ValueError):
+        return web.json_response({"error": "bad max_players"}, status=400)
+    if not (2 <= max_players <= 32):
+        return web.json_response({"error": "max_players 2-32"}, status=400)
+
+    # payment — optional, 0/None means no payment.
+    raw_pay = body.get("payment_amount_cents")
+    if raw_pay in (None, "", 0, "0"):
+        payment = None
+    else:
+        try:
+            payment = int(raw_pay)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "bad payment"}, status=400)
+        if payment < 0:
+            return web.json_response({"error": "negative payment"}, status=400)
+        if payment == 0:
+            payment = None
+
+    # notes — optional.
+    raw_notes = body.get("notes")
+    if raw_notes is None or (isinstance(raw_notes, str) and not raw_notes.strip()):
+        notes = None
+    else:
+        notes = str(raw_notes).strip()
+        if len(notes) > 200:
+            return web.json_response({"error": "notes <=200 chars"}, status=400)
+
+    game_id = db.create_game(
+        scheduled_for=dt,
+        location=location,
+        organizer_id=user_id,
+        max_players=max_players,
+        notes=notes,
+        chat_id=chat_id,
+        payment_amount_cents=payment,
+    )
+
+    # Post the canonical card into the chat. Best-effort: even if the
+    # message-send fails (e.g. bot got kicked), the DB row exists and the
+    # caller already saw the green-checkmark response. The poster closure
+    # is supplied by main.py and closes over the PTB bot_data (which holds
+    # bot_username, tz, etc.).
+    poster = request.app.get("post_card")
+    if poster is not None:
+        try:
+            await poster(chat_id, game_id)
+        except Exception as e:
+            log.warning("Couldn't post game card for new game %s: %s", game_id, e)
+
+    return web.json_response({"id": game_id})
+
+
+# ─────────────────────────────────────────────
 # App factory
 # ─────────────────────────────────────────────
 
@@ -846,6 +981,7 @@ def create_app(
     tz: ZoneInfo,
     completion_callback,
     refresh_card: Callable[[int], Awaitable[None]],
+    post_card: Callable[[int, int], Awaitable[None]],
 ) -> web.Application:
     """Build the aiohttp app.
 
@@ -857,6 +993,9 @@ def create_app(
     so the in-chat card stays in sync with the mini-app's view. It runs
     on the same asyncio loop as the bot, so it can call
     bot.edit_message_text directly.
+
+    `post_card(chat_id, game_id)` posts a fresh game-card message into
+    the chat. Used by the newgame mini-app right after creating a game.
     """
     app = web.Application(middlewares=[auth_middleware])
     app["bot"] = bot
@@ -864,18 +1003,24 @@ def create_app(
     app["tz"] = tz
     app["completion_callback"] = completion_callback
     app["refresh_card"] = refresh_card
+    app["post_card"] = post_card
 
     # Static / health
     app.router.add_get("/", health)
     app.router.add_get("/healthz", health)
     app.router.add_get("/register", _serve_static("register.html"))
     app.router.add_get("/manage", _serve_static("manage.html"))
+    app.router.add_get("/newgame", _serve_static("newgame.html"))
     app.router.add_get("/moneyball", serve_miniapp)         # used by Telegram deep links (id in start_param)
     app.router.add_get("/moneyball/{mb_id}", serve_miniapp) # legacy/direct access
 
     # Moneyball API (existing)
     app.router.add_get("/api/moneyball/{mb_id}", get_moneyball)
     app.router.add_post("/api/moneyball/{mb_id}/score", post_score)
+
+    # New-game (chat-scoped)
+    app.router.add_get("/api/chat/{enc_chat_id}/newgame", get_newgame_context)
+    app.router.add_post("/api/chat/{enc_chat_id}/newgame", post_newgame)
 
     # Game state (any chat member)
     app.router.add_get("/api/game/{game_id}", get_game_state)

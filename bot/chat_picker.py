@@ -168,9 +168,9 @@ async def on_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     title = chat.get("title") or f"Chat {chat_id}"
 
     if handler is None:
-        # Some commands (like /newgame, which is a ConversationHandler) can't
-        # be cleanly re-dispatched from a callback. Tell the user to retype;
-        # the one-shot flag will route their retyped command to the picked
+        # Some commands (e.g. ConversationHandlers) can't be cleanly
+        # re-dispatched from a callback. Tell the user to retype; the
+        # one-shot flag will route their retyped command to the picked
         # chat without prompting again.
         try:
             await q.edit_message_text(

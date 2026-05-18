@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 from telegram.ext import Application, CommandHandler
 
 from . import db, moneyball, http_server, chat_picker
-from .handlers import common, games, moneyball as mb_handlers, merge, newgame, roster, chat_events
+from .handlers import common, games, moneyball as mb_handlers, merge, roster, chat_events
 
 
 async def amain() -> None:
@@ -64,10 +64,8 @@ async def amain() -> None:
     app.add_handler(CommandHandler("start", common.cmd_start))
     app.add_handler(CommandHandler("help", common.cmd_help))
 
-    # /newgame conversation — must register before generic text handler
-    app.add_handler(newgame.build_newgame_handler())
-
-    # /games, /mygames, /past, /week
+    # /games, /mygames, /past, /week — game creation is now a Mini App
+    # launched from the New game button at the bottom of /games.
     for h in games.build_games_handlers():
         app.add_handler(h)
 
@@ -115,12 +113,19 @@ async def amain() -> None:
         # chat stays in sync with the mini-app's view.
         await roster.refresh_card_in_chat(app.bot, app.bot_data, game_id)
 
+    async def post_card_cb(chat_id: int, game_id: int) -> None:
+        # Called from the newgame mini-app right after a game row is
+        # created. Posts the fresh card into the chat using the same
+        # rendering path as the in-handler post_game_card.
+        await roster.post_card_from_bot(app.bot, app.bot_data, chat_id, game_id)
+
     http_app = http_server.create_app(
         bot=app.bot,
         bot_token=token,
         tz=tz,
         completion_callback=completion_cb,
         refresh_card=refresh_card_cb,
+        post_card=post_card_cb,
     )
 
     # ─── Boot ───

@@ -14,21 +14,48 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.helpers import escape
 
 
-# Short names of the two Mini Apps registered in BotFather via /newapp.
+# Short names of the Mini Apps registered in BotFather via /newapp.
 # These are the path segment in t.me/<bot_username>/<short_name>?startapp=<id>.
 # Keep in sync with the BotFather setup steps in README.md.
 REGISTER_APP_SHORT_NAME = "register"
 MANAGE_APP_SHORT_NAME = "manage"
+NEWGAME_APP_SHORT_NAME = "newgame"
 
 
-def _miniapp_url(bot_username: str, short_name: str, game_id: int) -> str:
+def _miniapp_url(bot_username: str, short_name: str, start_param) -> str:
     """Build the t.me deep link that opens a Mini App with a start_param.
 
     Telegram passes start_param through to the Web App as
     Telegram.WebApp.initDataUnsafe.start_param, which is how the page
-    learns which game it's viewing.
+    learns which game/chat it's viewing.
     """
-    return f"https://t.me/{bot_username}/{short_name}?startapp={game_id}"
+    return f"https://t.me/{bot_username}/{short_name}?startapp={start_param}"
+
+
+def encode_chat_id(chat_id: int) -> str:
+    """Encode a Telegram chat_id for use in a Mini App start_param or URL.
+
+    Telegram restricts start_param to [A-Za-z0-9_-]{1,64}. Group chat IDs
+    are negative integers; we prefix negatives with `n` and use the
+    absolute value digits so the value is unambiguous and avoids any
+    edge cases around leading `-` characters.
+    """
+    return f"n{-chat_id}" if chat_id < 0 else str(chat_id)
+
+
+def decode_chat_id(s: str) -> Optional[int]:
+    """Inverse of encode_chat_id. Returns None on bad input."""
+    if not s:
+        return None
+    if s.startswith("n"):
+        try:
+            return -int(s[1:])
+        except ValueError:
+            return None
+    try:
+        return int(s)
+    except ValueError:
+        return None
 
 
 # ─────────────────────── time formatting ─────────────────────── #
@@ -347,17 +374,56 @@ def _short_label(p: dict) -> str:
 
 def render_game_list_header(count: int, label: str = "Upcoming games") -> str:
     if count == 0:
-        return f"<b>{label}</b>\n<i>none scheduled</i>\n\nUse /newgame to add one."
+        return (
+            f"<b>{label}</b>\n<i>none scheduled</i>\n\n"
+            "Tap <b>+ New game</b> below to add one."
+        )
     return f"<b>{label}</b> ({count})"
 
 
-def game_list_keyboard(games: list[dict], tz: ZoneInfo) -> InlineKeyboardMarkup:
+def game_list_keyboard(
+    games: list[dict],
+    tz: ZoneInfo,
+    *,
+    bot_username: Optional[str] = None,
+    chat_id: Optional[int] = None,
+    show_new_game: bool = True,
+) -> InlineKeyboardMarkup:
+    """Inline keyboard for a /games-style list.
+
+    When `show_new_game` is True and both `bot_username` and `chat_id`
+    are provided, a "+ New game" button is appended that opens the
+    newgame Mini App scoped to this chat. Past-games lists pass
+    `show_new_game=False` so we don't tempt people to schedule a new
+    game from a historical view.
+    """
     rows = []
     for g in games:
         label = f"{format_when_short(g['scheduled_for'], tz)} @ {g['location']}"
         if len(label) > 50:
             label = label[:49] + "…"
         rows.append([InlineKeyboardButton(label, callback_data=f"open:{g['id']}")])
+
+    if show_new_game and chat_id is not None:
+        if bot_username:
+            rows.append([
+                InlineKeyboardButton(
+                    "➕ New game",
+                    url=_miniapp_url(
+                        bot_username,
+                        NEWGAME_APP_SHORT_NAME,
+                        encode_chat_id(chat_id),
+                    ),
+                )
+            ])
+        else:
+            rows.append([
+                InlineKeyboardButton(
+                    "➕ New game",
+                    callback_data=f"miniapp_unavailable:0",
+                )
+            ])
+
     return InlineKeyboardMarkup(rows) if rows else InlineKeyboardMarkup([])
 
 

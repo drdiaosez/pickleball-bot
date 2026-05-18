@@ -23,7 +23,7 @@ pickleball-bot/
     └── handlers/
         ├── __init__.py    — empty
         ├── common.py      — gate(), touch_member(), /start, /help, error handler
-        ├── newgame.py     — /newgame ConversationHandler (5 states)
+        ├── newgame.py     — date / payment parsers (the /newgame command is gone — game creation is the newgame Mini App)
         ├── games.py       — /games, /mygames, /past, /week
         ├── roster.py      — every game-card button callback (the big one)
         ├── moneyball.py   — /moneyball, /leaderboard, mb_pick callback
@@ -36,13 +36,12 @@ pickleball-bot/
 Reads `.env`, initializes DB + moneyball schema, builds the `Application`, registers handlers, starts polling + HTTP server. **Handler registration order matters** and is documented inline:
 
 1. `/start`, `/help`
-2. `/newgame` ConversationHandler — registered before generic text handler so its text state captures work
-3. `/games`, `/mygames`, `/past`, `/week`
-4. `/moneyball`, `/leaderboard`, mb_pick callback
-5. `/merge` + its confirmation callback
-6. `/cancelguest`, `/canceledit` (must be before generic text handler in roster)
-7. **Chat picker callback** (`pick_chat:*`) — **MUST be before** roster's catch-all `CallbackQueryHandler`, which has no pattern filter and would otherwise swallow these
-8. Roster catch-all callbacks + text dispatcher
+2. `/games`, `/mygames`, `/past`, `/week` (game creation is now the newgame Mini App, launched from the "+ New game" button on `/games`)
+3. `/moneyball`, `/leaderboard`, mb_pick callback
+4. `/merge` + its confirmation callback
+5. `/cancelguest`, `/canceledit` (must be before generic text handler in roster)
+6. **Chat picker callback** (`pick_chat:*`) — **MUST be before** roster's catch-all `CallbackQueryHandler`, which has no pattern filter and would otherwise swallow these
+7. Roster catch-all callbacks + text dispatcher
 9. `chat_events` handlers (my_chat_member, chat_member, migrate)
 
 Polling uses `allowed_updates=["message", "callback_query", "my_chat_member", "chat_member"]`. The `chat_member` updates only arrive if the bot is an admin in the chat.
@@ -101,8 +100,6 @@ When a user DMs the bot and belongs to multiple registered groups, we need to di
 
 The picker's callback (`pick_chat:<command>:<chat_id>`) re-dispatches by looking up `COMMAND_REGISTRY[command_label]` and calling it directly. Modules populate this registry at **import time** via `register_command()` calls — so the registry is ready before `main.py` registers handlers.
 
-**`/newgame` is special**: it's a ConversationHandler and can't be cleanly re-dispatched from a callback. The picker tells the user to retype `/newgame`; the one-shot flag is still set, so the retyped command routes correctly without prompting again.
-
 **Handler registration ORDER**: `build_picker_handlers()` MUST be added before `roster.build_roster_handlers()`. Roster's catch-all `CallbackQueryHandler` has no pattern filter and would swallow `pick_chat:*` otherwise. See main.py's comments.
 
 ## `bot/views.py` — formatting (~330 lines)
@@ -160,13 +157,11 @@ Local dev: set `DEV_BYPASS_USER_ID` + `DEV_BYPASS_SECRET` to skip HMAC; client s
 - `cmd_start`, `cmd_help` — both show `HELP_TEXT` block defined at top.
 - `error_handler` — logs + responds with a generic "something went wrong" so users aren't left hanging.
 
-## `bot/handlers/newgame.py` — ConversationHandler (~355 lines)
+## `bot/handlers/newgame.py` — parser utilities (~150 lines)
 
-5 states: `ASK_WHEN` → `ASK_LOCATION` → `ASK_MAX` → `ASK_PAYMENT` → `ASK_NOTES` → end (create + post card).
+Game creation moved to the newgame Mini App (`bot/static/newgame.html` + `POST /api/chat/{enc_chat_id}/newgame`). This module now only hosts the two parsers `parse_datetime()` and `parse_payment()` that other handlers (the in-chat edit flows in `roster.py`) still import.
 
 `parse_datetime()` is forgiving: accepts `wed 6:30pm`, `thursday 7pm`, `tomorrow 6pm`, `today 5:30pm`, `5/14 6:30pm`, `2026-05-14 18:30`. Strategy: extract the date first (stricter syntax), strip it, parse the rest as time.
-
-`/skip` is accepted at the optional steps (max players defaults to 4, payment defaults to none, notes default to empty).
 
 ## `bot/handlers/games.py` — listing (~180 lines)
 

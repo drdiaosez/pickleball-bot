@@ -17,8 +17,7 @@ log = logging.getLogger(__name__)
 HELP_TEXT = (
     "<b>🎾 Pickleball Bot</b>\n\n"
     "<b>Commands</b>\n"
-    "/newgame — schedule a new game\n"
-    "/games — list upcoming games\n"
+    "/games — list upcoming games (tap <b>+ New game</b> to schedule one)\n"
     "/mygames — games you're signed up for\n"
     "/past — recent past games\n"
     "/week — games this week (Mon-Sun)\n"
@@ -28,8 +27,8 @@ HELP_TEXT = (
     "   <i>/leaderboard year, /leaderboard alltime</i>\n"
     "/merge — (admin) merge a guest's history into a member\n"
     "/help — this message\n\n"
-    "Everything else (joining, leaving, adding guests, swaps) happens "
-    "through the buttons on each game card.\n\n"
+    "Everything else (joining, leaving, adding guests, swaps, managing games) "
+    "happens through the buttons on each game card.\n\n"
     "<i>Works in the group or in DM. If you DM and belong to multiple groups, "
     "the bot will ask which one you mean.</i>"
 )

@@ -45,6 +45,35 @@ log = logging.getLogger(__name__)
 
 # ─────────────────────── card posting & refresh ─────────────────────── #
 
+async def post_card_from_bot(bot, bot_data: dict, chat_id: int, game_id: int) -> None:
+    """Post a fresh game card from a non-handler context.
+
+    Used by the HTTP server's `/api/chat/{id}/newgame` endpoint, which
+    creates a game from the mini-app and then needs to announce it in
+    the originating group chat. Sister to post_game_card() which is
+    callable from a CommandHandler `context`.
+    """
+    tz = bot_data["tz"]
+    game = db.get_game(game_id)
+    if not game:
+        return
+    participants = db.get_participants(game_id)
+    organizer = db.get_member(game["organizer_id"])
+    org_name = organizer["display_name"] if organizer else "?"
+
+    text = views.render_game_card(game, participants, tz, org_name)
+    kb = views.game_card_keyboard(
+        game_id,
+        bot_username=bot_data.get("bot_username"),
+        viewer_registered=False,
+        has_payment=views.game_has_payment(game),
+    )
+    msg = await bot.send_message(
+        chat_id=chat_id, text=text, parse_mode=ParseMode.HTML, reply_markup=kb
+    )
+    db.set_game_message(game_id, chat_id, msg.message_id)
+
+
 async def refresh_card_in_chat(bot, bot_data: dict, game_id: int) -> None:
     """Re-render a game card in its owning chat, outside any callback context.
 

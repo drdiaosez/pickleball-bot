@@ -1,5 +1,4 @@
-newgame - Schedule a new game
-games - Show upcoming games
+games - Show upcoming games (tap + New game to schedule one)
 mygames - Show games you're signed up for
 past - Recent past games
 week - Games in a specific week (Mon-Sun)

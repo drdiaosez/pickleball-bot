@@ -27,12 +27,12 @@ async def cmd_games(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat_id is None:
         return
     tz = context.bot_data["tz"]
+    bot_username = context.bot_data.get("bot_username")
     games = db.list_upcoming_games(tz=tz, chat_id=chat_id)
     text = views.render_game_list_header(len(games), "Upcoming games")
-    if not games:
-        await update.effective_message.reply_html(text)
-        return
-    kb = views.game_list_keyboard(games, tz)
+    kb = views.game_list_keyboard(
+        games, tz, bot_username=bot_username, chat_id=chat_id,
+    )
     await update.effective_message.reply_html(text, reply_markup=kb)
 
 
@@ -45,13 +45,13 @@ async def cmd_mygames(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if chat_id is None:
         return
     tz = context.bot_data["tz"]
+    bot_username = context.bot_data.get("bot_username")
     user = update.effective_user
     games = db.list_games_for_member(user.id, tz=tz, chat_id=chat_id)
     text = views.render_game_list_header(len(games), "Your upcoming games")
-    if not games:
-        await update.effective_message.reply_html(text)
-        return
-    kb = views.game_list_keyboard(games, tz)
+    kb = views.game_list_keyboard(
+        games, tz, bot_username=bot_username, chat_id=chat_id,
+    )
     await update.effective_message.reply_html(text, reply_markup=kb)
 
 
@@ -71,7 +71,9 @@ async def cmd_past(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "<b>Past games</b>\n<i>none yet</i>"
         )
         return
-    kb = views.game_list_keyboard(games, tz)
+    # Past list intentionally omits the New game button — this is a
+    # historical view, not a place to schedule from.
+    kb = views.game_list_keyboard(games, tz, show_new_game=False)
     await update.effective_message.reply_html(text, reply_markup=kb)
 
 
@@ -113,12 +115,17 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"{(monday + timedelta(days=6)).strftime('%a %-m/%-d')}"
     )
     text = views.render_game_list_header(len(games), label)
+    bot_username = context.bot_data.get("bot_username")
+    kb = views.game_list_keyboard(
+        games, tz, bot_username=bot_username, chat_id=chat_id,
+    )
     if not games:
+        # Even empty weeks get the New game button.
         await update.effective_message.reply_html(
-            f"<b>{label}</b>\n<i>no games scheduled</i>"
+            f"<b>{label}</b>\n<i>no games scheduled</i>",
+            reply_markup=kb,
         )
         return
-    kb = views.game_list_keyboard(games, tz)
     await update.effective_message.reply_html(text, reply_markup=kb)
 
 

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>New game · Pickleball</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #1a1a1a);
+    --hint: var(--tg-theme-hint-color, #888);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --button: var(--tg-theme-button-color, #2481cc);
+    --button-text: var(--tg-theme-button-text-color, #ffffff);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #f4f4f5);
+    --section-bg: var(--tg-theme-section-bg-color, #ffffff);
+    --section-sep: var(--tg-theme-section-separator-color, #e5e5e7);
+    --destructive: var(--tg-theme-destructive-text-color, #d33);
+    --accent: var(--tg-theme-accent-text-color, var(--link));
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--secondary-bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 12px 14px 32px; }
+
+  .card {
+    background: var(--section-bg);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: 13px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--hint);
+    margin: 0 0 10px;
+  }
+  .title { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .subtitle { color: var(--hint); font-size: 13px; }
+
+  .field {
+    display: flex; flex-direction: column; gap: 4px;
+    margin-bottom: 12px;
+  }
+  .field:last-child { margin-bottom: 0; }
+  .field label {
+    font-size: 12px; color: var(--hint);
+    text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;
+  }
+  .field input, .field textarea {
+    border: 1px solid var(--section-sep);
+    background: var(--secondary-bg);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font: inherit;
+    width: 100%;
+  }
+  .field input:focus, .field textarea:focus {
+    outline: 2px solid var(--button);
+    outline-offset: -1px;
+  }
+  .field textarea { resize: vertical; min-height: 60px; }
+  .field .help { font-size: 12px; color: var(--hint); }
+
+  /* Recent location chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip {
+    display: inline-flex; align-items: center;
+    background: var(--secondary-bg);
+    border: 1px solid var(--section-sep);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .chip:active { opacity: 0.8; }
+
+  .btn {
+    appearance: none;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 15px;
+    font-weight: 500;
+    background: var(--button);
+    color: var(--button-text);
+    cursor: pointer;
+    width: 100%;
+    transition: opacity 0.15s;
+  }
+  .btn:active { opacity: 0.85; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: var(--text); color: var(--bg);
+    padding: 10px 16px; border-radius: 999px;
+    font-size: 13px; opacity: 0; pointer-events: none;
+    transition: opacity 0.2s; z-index: 99;
+  }
+  .toast.show { opacity: 0.92; }
+
+  .loading { text-align: center; color: var(--hint); padding: 40px 0; }
+  .error-banner {
+    background: rgba(255, 59, 48, 0.12); color: var(--destructive);
+    padding: 12px 14px; border-radius: 10px; margin-bottom: 12px; font-size: 14px;
+  }
+  .gate-card {
+    background: var(--section-bg);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+  }
+  .gate-card h1 { font-size: 18px; margin: 0 0 8px; }
+  .gate-card p { color: var(--hint); margin: 0; }
+</style>
+</head>
+<body>
+<div class="wrap" id="root">
+  <div class="loading">Loading…</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+// start_param encodes the chat_id. The server uses the same scheme:
+//   negative chat_id → "n" + abs(chat_id)
+//   positive         → digits
+function getEncChatId() {
+  const fromStart = tg?.initDataUnsafe?.start_param;
+  if (fromStart && /^n?\d+$/.test(fromStart)) return fromStart;
+  const url = new URL(window.location.href);
+  const q = url.searchParams.get("chat");
+  if (q && /^n?\d+$/.test(q)) return q;
+  return null;
+}
+
+const ENC_CHAT_ID = getEncChatId();
+const INIT_DATA = tg?.initData || "";
+
+let context = null;
+let pending = false;
+
+const root = document.getElementById("root");
+const toastEl = document.getElementById("toast");
+
+function showToast(text, ms = 1800) {
+  toastEl.textContent = text;
+  toastEl.classList.add("show");
+  clearTimeout(toastEl._t);
+  toastEl._t = setTimeout(() => toastEl.classList.remove("show"), ms);
+}
+
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function apiCall(path, opts = {}) {
+  if (pending) return null;
+  pending = true;
+  try {
+    const headers = {
+      "X-Telegram-Init-Data": INIT_DATA,
+      "Content-Type": "application/json",
+      ...(opts.headers || {}),
+    };
+    const res = await fetch(path, { ...opts, headers });
+    let payload = null;
+    try { payload = await res.json(); } catch (e) {}
+    if (!res.ok) {
+      const msg = payload?.error || `HTTP ${res.status}`;
+      showToast(msg);
+      return { _error: msg, _status: res.status };
+    }
+    return payload;
+  } catch (e) {
+    showToast("Network error");
+    return null;
+  } finally {
+    pending = false;
+  }
+}
+
+function renderGate(msg) {
+  root.innerHTML = `
+    <div class="gate-card">
+      <h1>New game</h1>
+      <p>${escapeHtml(msg)}</p>
+    </div>`;
+}
+
+// Default time suggestion: tomorrow 9:30am local. Helps users get
+// going without fiddling with the date input.
+function defaultDateTimeLocal() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(9, 30, 0, 0);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderForm() {
+  const recent = context.recent_locations || [];
+  const chipsHtml = recent.length
+    ? `<div class="chips">${recent.map((loc) =>
+         `<span class="chip" data-loc="${escapeHtml(loc)}">📍 ${escapeHtml(loc)}</span>`
+       ).join("")}</div>`
+    : "";
+
+  root.innerHTML = `
+    <div class="card">
+      <div class="title">➕ New game</div>
+      <div class="subtitle">Scheduling for <b>${escapeHtml(context.chat.title)}</b></div>
+    </div>
+
+    <div class="card">
+      <div class="field">
+        <label for="f-time">Date &amp; start time</label>
+        <input type="datetime-local" id="f-time" value="${defaultDateTimeLocal()}" />
+      </div>
+      <div class="field">
+        <label for="f-loc">Location</label>
+        <input type="text" id="f-loc" placeholder="e.g. Riverside Club, Court 3" maxlength="100" autocomplete="off" />
+        ${chipsHtml}
+      </div>
+      <div class="field">
+        <label for="f-max">Max players</label>
+        <input type="number" id="f-max" min="2" max="32" value="4" />
+        <div class="help">Defaults to 4. Extras go to the waitlist.</div>
+      </div>
+      <div class="field">
+        <label for="f-pay">Payment per person (cents)</label>
+        <input type="number" id="f-pay" min="0" value="0" />
+        <div class="help">0 = no payment. 500 = $5.00.</div>
+      </div>
+      <div class="field">
+        <label for="f-notes">Notes</label>
+        <textarea id="f-notes" maxlength="200" placeholder="(optional) e.g. bring 4 balls"></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <button class="btn" id="submit-game">✓ Create game</button>
+    </div>
+  `;
+
+  // Wire recent-location chips → fill the location input
+  root.querySelectorAll(".chip[data-loc]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const input = document.getElementById("f-loc");
+      input.value = el.dataset.loc;
+      input.focus();
+    });
+  });
+
+  document.getElementById("submit-game").addEventListener("click", submit);
+}
+
+async function submit() {
+  const btn = document.getElementById("submit-game");
+  const time = document.getElementById("f-time").value;
+  const loc = document.getElementById("f-loc").value.trim();
+  const max = parseInt(document.getElementById("f-max").value, 10);
+  const pay = parseInt(document.getElementById("f-pay").value, 10);
+  const notes = document.getElementById("f-notes").value;
+
+  if (!time) { showToast("Pick a date & time."); return; }
+  if (!loc)  { showToast("Add a location."); return; }
+  if (Number.isNaN(max) || max < 2 || max > 32) {
+    showToast("Max players must be 2-32.");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Creating…";
+
+  const body = {
+    scheduled_for: time,
+    location: loc,
+    max_players: max,
+    payment_amount_cents: Number.isNaN(pay) ? 0 : pay,
+    notes: notes || null,
+  };
+  const data = await apiCall(`/api/chat/${ENC_CHAT_ID}/newgame`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+  if (data && !data._error && data.id) {
+    root.innerHTML = `
+      <div class="gate-card">
+        <h1>✓ Game posted</h1>
+        <p>The game card is now in your group chat. You can close this window.</p>
+      </div>`;
+    showToast("Game created.");
+    setTimeout(() => { tg?.close(); }, 1200);
+  } else {
+    btn.disabled = false;
+    btn.textContent = "✓ Create game";
+  }
+}
+
+async function load() {
+  if (!ENC_CHAT_ID) {
+    renderGate("Missing chat id — open this from the /games list in your group.");
+    return;
+  }
+  const data = await apiCall(`/api/chat/${ENC_CHAT_ID}/newgame`);
+  if (!data) return;
+  if (data._error) {
+    if (data._status === 403) {
+      renderGate("You don't have access to this chat.");
+    } else {
+      renderGate(data._error);
+    }
+    return;
+  }
+  context = data;
+  renderForm();
+}
+
+load();
+</script>
+</body>
+</html>
