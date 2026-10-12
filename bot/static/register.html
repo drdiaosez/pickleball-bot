@@ -281,6 +281,10 @@ async function refresh() {
     return;
   }
   const data = await apiCall(`/api/game/${GAME_ID}`);
+  if (!data) {
+    root.innerHTML = `<div class="error-banner">Couldn't load this game. Open it from the game card in your group chat, and make sure Telegram is up to date. If it keeps happening, ask an admin.</div>`;
+    return;
+  }
   if (data) {
     state = data;
     render();

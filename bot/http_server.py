@@ -170,7 +170,20 @@ async def auth_middleware(request: web.Request, handler):
         if chat_id is not None:
             member_row = db.get_chat_member(chat_id, user_id)
             if member_row is None:
-                return web.json_response({"error": "not a member of this chat"}, status=403)
+                # Not in our cache (e.g. added to a game by someone else, or
+                # dropped on a leave/rejoin). Ask Telegram before rejecting.
+                from . import chats as chats_mod
+                try:
+                    role = await chats_mod.sync_user_in_chat(
+                        request.app["bot"], chat_id, user_id
+                    )
+                except Exception:
+                    log.exception("Mini-app membership resync failed")
+                    role = None
+                if role is None:
+                    return web.json_response(
+                        {"error": "not a member of this chat"}, status=403
+                    )
         request["game"] = game
         request["chat_id"] = chat_id
 
@@ -227,7 +240,7 @@ def _serve_static(filename: str) -> Callable[[web.Request], Awaitable[web.Respon
     async def _handler(request: web.Request) -> web.Response:
         if not path.exists():
             return web.Response(text=f"{filename} not deployed", status=500)
-        return web.FileResponse(path)
+        return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
 
     return _handler
 
